@@ -74,8 +74,18 @@ class Encoder(nn.Module):
         self.num_attention_layers = None
         self.embed_tokens = Embedding(num_embeddings, embed_dim, padding_idx)
         self.embed_positions = Embedding(max_positions, embed_dim, padding_idx)
+        
+        print("Encoder:padding_idx:"+str(padding_idx))
+        print("Encoder:self.embed_tokens:"+str(self.embed_tokens))
+        print("Encoder:self.embed_positions:"+str(self.embed_positions))
+        """
+        Encoder:padding_idx:1
+        Encoder:self.embed_tokens:Embedding(15912, 256, padding_idx=1)
+        Encoder:self.embed_positions:Embedding(1024, 256, padding_idx=1)
+        """
 
-        in_channels = convolutions[0][0]
+        in_channels = convolutions[0][0]  ###256
+        ###print("Encoder:in_channels:"+str(in_channels)) ###256
         self.fc1 = Linear(embed_dim, in_channels, dropout=dropout)
         self.projections = nn.ModuleList()
         self.convolutions = nn.ModuleList()
@@ -92,8 +102,10 @@ class Encoder(nn.Module):
     def forward(self, tokens, positions):
         # embed tokens and positions
         x = self.embed_tokens(tokens) + self.embed_positions(positions)
+        ###print("Encoder:len(x):"+str(len(x))+" "+str(len(x[0]))+" "+str(len(x[0][0])))  ###x:B,T,D
         x = F.dropout(x, p=self.dropout, training=self.training)
         input_embedding = x
+        print("Encoder:input_embedding:"+str(input_embedding))
 
         # project to size of convolution
         x = self.fc1(x)
