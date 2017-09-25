@@ -130,10 +130,15 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             self.call_async(rank, '_async_train_step', criterion=criterion)
             for rank in range(self.num_replicas)
         ]
+        ###print("train step losses:"+str(losses))
 
         # aggregate losses and gradient norms
         losses, grad_norms = Future.gen_tuple_list(losses)
+        ###print("train step losses2:"+str(losses))
+        ###print("train step grad_norms:"+str(grad_norms))
         loss = criterion.aggregate(losses)
+        ###print("train step loss:"+str(loss))
+        ###print("train step grad_norms[0]:"+str(grad_norms[0]))
 
         return loss, grad_norms[0]
 
@@ -146,6 +151,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # calculate loss and grads
         loss = 0
         if self._sample is not None:
+            ###print("self._sample['net_input']"+str(self._sample['net_input'])) ###id,src_tokens,input_tokens,input_positions,target,src_positions,ntokens
             net_output = self.model(**self._sample['net_input'])
             loss_ = criterion(net_output, self._sample)
             loss_.backward()

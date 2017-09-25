@@ -31,6 +31,7 @@ def build_model(args, dataset):
 
 def build_criterion(args, dataset):
     padding_idx = dataset.dst_dict.pad()
+    print("build_criterion padding_idx:"+str(padding_idx))
     if args.label_smoothing > 0:
         return criterions.LabelSmoothedCrossEntropyCriterion(args.label_smoothing, padding_idx)
     else:

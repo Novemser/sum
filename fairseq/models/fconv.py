@@ -105,7 +105,7 @@ class Encoder(nn.Module):
         ###print("Encoder:len(x):"+str(len(x))+" "+str(len(x[0]))+" "+str(len(x[0][0])))  ###x:B,T,D
         x = F.dropout(x, p=self.dropout, training=self.training)
         input_embedding = x
-        print("Encoder:input_embedding:"+str(input_embedding))
+        ###print("Encoder:input_embedding:"+str(input_embedding))
 
         # project to size of convolution
         x = self.fc1(x)

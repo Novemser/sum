@@ -66,6 +66,8 @@ def load(path, src, dst):
 
             if not IndexedInMemoryDataset.exists(src_path):
                 break
+            
+            print("dataset.src_dict.pad():"+str(dataset.src_dict.pad()))
 
             dataset.splits[prefix] = LanguagePairDataset(
                 IndexedInMemoryDataset(src_path),
