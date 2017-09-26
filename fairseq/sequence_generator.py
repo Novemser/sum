@@ -207,11 +207,13 @@ class SequenceGenerator(object):
         reorder_state = None
         for step in range(maxlen + 1):  # one extra step for EOS marker
             # reorder decoder internal states based on the prev choice of beams
+            print("step:"+str(step))
             if reorder_state is not None:
                 for model in self.models:
                     model.decoder.reorder_incremental_state(reorder_state)
 
             probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)
+            ##print("probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)   probs size:"+str(probs.size()))
             if step == 0:
                 # at the first step all hypotheses are equally likely, so use
                 # only the first beam
@@ -229,7 +231,9 @@ class SequenceGenerator(object):
             cand_scores = buffer('cand_scores', type_of=scores)
             cand_indices = buffer('cand_indices')
             cand_beams = buffer('cand_beams')
+            ##print("probs size view before:"+str(probs.size()))
             probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
+            ##print("probs size:"+str(probs.size()))
             torch.div(cand_indices, self.vocab_size, out=cand_beams)
             cand_indices.fmod_(self.vocab_size)
 
