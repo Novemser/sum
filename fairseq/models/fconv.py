@@ -10,6 +10,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 from fairseq.modules import BeamableMM, LinearizedConvolution
 
@@ -68,12 +69,15 @@ class FConvModel(nn.Module):
 class Encoder(nn.Module):
     """Convolutional encoder"""
     def __init__(self, num_embeddings, embed_dim=512, max_positions=1024,
-                 convolutions=((512, 3),) * 20, dropout=0.1, padding_idx=1):
+                 convolutions=((512, 3),) * 20, dropout=0.1, padding_idx=1,vocab_topic_emb=None):
         super(Encoder, self).__init__()
         self.dropout = dropout
         self.num_attention_layers = None
         self.embed_tokens = Embedding(num_embeddings, embed_dim, padding_idx)
         self.embed_positions = Embedding(max_positions, embed_dim, padding_idx)
+        
+        #self.embed_tokens_topic = nn.Embedding(num_embeddings, embed_dim, padding_idx)
+        #self.embed_tokens_topic.weight = nn.Parameter(vocab_topic_emb)
         
         print("Encoder:padding_idx:"+str(padding_idx))
         print("Encoder:self.embed_tokens:"+str(self.embed_tokens))
@@ -102,6 +106,7 @@ class Encoder(nn.Module):
     def forward(self, tokens, positions):
         # embed tokens and positions
         x = self.embed_tokens(tokens) + self.embed_positions(positions)
+        print("Encoder: tokens:"+str(tokens.size()))
         ###print("Encoder:len(x):"+str(len(x))+" "+str(len(x[0]))+" "+str(len(x[0][0])))  ###x:B,T,D
         x = F.dropout(x, p=self.dropout, training=self.training)
         input_embedding = x
@@ -133,6 +138,8 @@ class Encoder(nn.Module):
         # add output to input embedding for attention
         y = (x + input_embedding) * math.sqrt(0.5)
 
+        print("Encoder x output size:"+str(x.size()))
+        print("Encoder y output size:"+str(y.size()))
         return x, y
 
 
@@ -167,6 +174,9 @@ class AttentionLayer(nn.Module):
 
         # project back
         x = (self.out_projection(x) + residual) * math.sqrt(0.5)
+        
+        print("AttentionLayer x output size:"+str(x.size()))
+        print("AttentionLayer attn_scores output size:"+str(attn_scores.size()))
         return x, attn_scores
 
 
@@ -245,7 +255,8 @@ class Decoder(nn.Module):
         x = self.fc2(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.fc3(x)
-
+ 
+        print("Decoder x output size:"+str(x.size()))
         return x
 
     def context_size(self):
@@ -513,8 +524,68 @@ def parse_arch(args):
     args.decoder_attention = getattr(args, 'decoder_attention', 'True')
     return args
 
+def random_list_generate(min_value,max_value,list_size):  ######generate random numbers which mean 0, stddev 0.1
+    rarray=np.random.uniform(min_value,max_value,size=list_size)
+    mean=np.average(rarray)
+    stddev=np.std(rarray)*10
+    return [(value-mean)/stddev for value in list(rarray)]
 
 def build_model(args, dataset):
+    ################calculate topic words and build target vocab topic words ids index 
+    filename_topic_model = "giga_lda_model0716_"   
+    words=[]
+    features=[]
+    emb_size=0
+    topic_word_num=200
+    ###f = open(self.params["topic_model.path"],"r")
+    f = open(filename_topic_model,"r")
+    texts = f.readlines()
+    for line in texts: 
+       emb_size=len(line.split('\t')[1].split(' '))
+       words.append(line.split('\t')[0])
+       features.append([float(probability) for probability in line.split('\t')[1].split(' ')[0:emb_size]])
+    f.close()    
+    samples_size = len(words)    
+    topic_words=[]
+    for i in range(0,emb_size):
+       pro_dict={}
+       for j in range(0,samples_size):
+            pro_dict[words[j]]=features[j][i]
+       prob_list = sorted(pro_dict.items(),key=lambda d:d[1],reverse=True)
+       topic_words = topic_words + [item[0] for item in prob_list[0:topic_word_num]]
+    topic_words = sorted(list(set(topic_words)))
+    
+    ### Load topic into memory
+    with open(filename_topic_model) as file:
+        vocab_topic = list(line.strip("\n") for line in file)
+    vocab_topic_size = len(vocab_topic)
+    print("vocab_topic_size:"+str(vocab_topic_size))
+        
+    vocab_topic, topic_embedding = zip(*[_.split("\t") for _ in vocab_topic])
+    ###vocab_topic, topic_embedding = zip(*[ [_.split(" ")[0], ' '.join(_.split(" ")[1:257])] for _ in vocab_topic])
+    topic_embedding = [list( float(_) for _ in _.split(" ") ) for _ in topic_embedding]
+      
+    topic_embedding=np.array(topic_embedding)
+    topic_embedding[topic_embedding>1.0]=1.0
+    topic_embedding=topic_embedding.tolist()
+    
+    topicword_embedding_dict = dict(zip(vocab_topic,topic_embedding))
+      
+    topic_emb_size = len(topic_embedding[0])
+    ###print("topic_emb_size:"+str(topic_emb_size))
+    
+    ##vacab_topic_dict = []
+    src_dict_word_idx = dataset.src_dict.indices
+    vocab_topic_emb = [[float(0)]*topic_emb_size]*len(src_dict_word_idx)
+    for word in src_dict_word_idx.keys():
+        if word in vocab_topic:
+            ##vacab_topic_dict.append(topic_embedding[vocab_topic.index(vocab[vocab_idx])])
+            vocab_topic_emb[src_dict_word_idx[word]] = topicword_embedding_dict[word]
+        else:
+            ##vacab_topic_dict.append( [float(0)]*topic_emb_size )
+            ### vocab_topic_emb[vocab_idx] = [float(0)]*topic_emb_size
+            vocab_topic_emb[src_dict_word_idx[word]] = random_list_generate(0,1,256)
+    
     padding_idx = dataset.dst_dict.pad()
     encoder = Encoder(
         len(dataset.src_dict),
@@ -523,6 +594,7 @@ def build_model(args, dataset):
         dropout=args.dropout,
         padding_idx=padding_idx,
         max_positions=args.max_positions,
+        vocab_topic_emb=torch.from_numpy(np.array(vocab_topic_emb)),
     )
     decoder = Decoder(
         len(dataset.dst_dict),
