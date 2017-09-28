@@ -74,6 +74,7 @@ def main():
 
     # Load the latest checkpoint if one is available
     epoch, batch_offset = trainer.load_checkpoint(os.path.join(args.save_dir, args.restore_file))
+    print("batch_offset:"+str(batch_offset))
 
     # Train until the learning rate gets too small
     val_loss = None
@@ -118,6 +119,7 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
                              max_tokens=args.max_tokens, seed=args.seed, epoch=epoch,
                              max_positions=args.max_positions,
                              sample_without_replacement=args.sample_without_replacement)
+    ###print("itr:"+str(itr))
     loss_meter = AverageMeter()
     bsz_meter = AverageMeter()    # sentences per batch
     wpb_meter = AverageMeter()    # words per batch
@@ -129,6 +131,8 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
     lr = trainer.get_lr()
     with progress_bar(itr, desc, leave=False) as t:
         for i, sample in data.skip_group_enumerator(t, num_gpus, batch_offset):
+            ###print("i:"+str(i)+" sample:"+str(sample)) ###id,src_tokens,input_tokens,input_positions,target,src_positions,ntokens
+            ###print("i:"+str(i)+" sample len:"+str(len(sample))+" sample id:"+str(sample[0]['id'])+" sample src_tokens:"+str(sample[0]['src_tokens'][0]))
             loss, grad_norm = trainer.train_step(sample, criterion)
 
             ntokens = sum(s['ntokens'] for s in sample)

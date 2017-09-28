@@ -432,7 +432,7 @@ class GradMultiply(torch.autograd.Function):
 
 def get_archs():
     return [
-        'fconv', 'fconv_giga', 'fconv_iwslt_de_en', 'fconv_wmt_en_ro', 'fconv_wmt_en_de', 'fconv_wmt_en_fr',
+        'fconv', 'fconv_giga', 'fconv_iwslt_de_en', 'fconv_wmt_en_ro', 'fconv_wmt_en_de', 'fconv_wmt_en_fr', 'fconv_giga_large',
     ]
 
 
@@ -463,6 +463,12 @@ def parse_arch(args):
         args.decoder_embed_dim = 256
         args.decoder_layers = '[(256, 3)] * 6'
         args.decoder_out_embed_dim = 256 
+    elif args.arch == 'fconv_giga_large':
+        args.encoder_embed_dim = 512
+        args.encoder_layers = '[(256, 3)] * 9'
+        args.decoder_embed_dim = 512
+        args.decoder_layers = '[(256, 3)] * 6'
+        args.decoder_out_embed_dim = 512
     elif args.arch == 'fconv_wmt_en_ro':
         args.encoder_embed_dim = 512
         args.encoder_layers = '[(512, 3)] * 20'
