@@ -69,18 +69,23 @@ class FConvModel(nn.Module):
 class Encoder(nn.Module):
     """Convolutional encoder"""
     def __init__(self, num_embeddings, embed_dim=512, max_positions=1024,
-                 convolutions=((512, 3),) * 20, dropout=0.1, padding_idx=1,vocab_topic_emb=None):
+                 convolutions=((512, 3),) * 20,convolutions_topic=((512, 3),) * 20, dropout=0.1, padding_idx=1,vocab_topic_emb=None):
         super(Encoder, self).__init__()
         self.dropout = dropout
         self.num_attention_layers = None
         self.embed_tokens = Embedding(num_embeddings, embed_dim, padding_idx)
         self.embed_positions = Embedding(max_positions, embed_dim, padding_idx)
         
-        #self.embed_tokens_topic = nn.Embedding(num_embeddings, embed_dim, padding_idx)
-        #self.embed_tokens_topic.weight = nn.Parameter(vocab_topic_emb)
+        ###print("self.embed_tokens:"+str(self.embed_tokens))
+        ###print("emb type norm:"+str(self.embed_tokens.norm_type)) ###2
+        
+        ###self.embed_tokens_topic = nn.Embedding(num_embeddings, embed_dim, padding_idx)
+        self.embed_tokens_topic = Embedding(num_embeddings, embed_dim, padding_idx)
+        ###self.embed_tokens_topic.weight = nn.Parameter(vocab_topic_emb)
         
         print("Encoder:padding_idx:"+str(padding_idx))
         print("Encoder:self.embed_tokens:"+str(self.embed_tokens))
+        print("Encoder:self.embed_tokens_topic:"+str(self.embed_tokens_topic))
         print("Encoder:self.embed_positions:"+str(self.embed_positions))
         """
         Encoder:padding_idx:1
@@ -102,12 +107,28 @@ class Encoder(nn.Module):
                         dropout=dropout))
             in_channels = out_channels
         self.fc2 = Linear(in_channels, embed_dim)
+        
+        ###topic
+        in_channels_topic = convolutions_topic[0][0]  ###256
+        self.fc1_topic = Linear(embed_dim, in_channels_topic, dropout=dropout)
+        self.projections_topic = nn.ModuleList()
+        self.convolutions_topic = nn.ModuleList()
+        for (out_channels, kernel_size) in convolutions_topic:
+            pad = (kernel_size - 1) // 2
+            self.projections_topic.append(Linear(in_channels_topic, out_channels)
+                                    if in_channels_topic != out_channels else None)
+            self.convolutions_topic.append(
+                ConvTBC(in_channels_topic, out_channels * 2, kernel_size, padding=pad,
+                        dropout=dropout))
+            in_channels_topic = out_channels
+        self.fc2_topic = Linear(in_channels_topic, embed_dim)
 
     def forward(self, tokens, positions):
         # embed tokens and positions
         x = self.embed_tokens(tokens) + self.embed_positions(positions)
-        print("Encoder: tokens:"+str(tokens.size()))
-        ###print("Encoder:len(x):"+str(len(x))+" "+str(len(x[0]))+" "+str(len(x[0][0])))  ###x:B,T,D
+        ###print("Encoder: tokens:"+str(tokens.size()))  ###[108,37]
+        ###print("Encoder:x:"+str(x.size()))  ###x:B,T,D
+        ###print("x:"+str(x))
         x = F.dropout(x, p=self.dropout, training=self.training)
         input_embedding = x
         ###print("Encoder:input_embedding:"+str(input_embedding))
@@ -138,9 +159,46 @@ class Encoder(nn.Module):
         # add output to input embedding for attention
         y = (x + input_embedding) * math.sqrt(0.5)
 
+        ####################topic encoder
+        ###print("self.embed_tokens_topic(tokens):"+str(type(self.embed_tokens_topic(tokens))))
+        ###print("self.embed_positions(positions):"+str(type(self.embed_positions(positions))))
+        x_topic = self.embed_tokens_topic(tokens).float() + self.embed_positions(positions).float()
+        ###print("x_topic:"+str(x_topic))
+        print("x_topic size:"+str(x_topic.size()))
+        
+        x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
+        input_embedding_topic = x_topic
+        ###print("Encoder:input_embedding:"+str(input_embedding))
+
+        # project to size of convolution
+        x_topic = self.fc1_topic(x_topic)
+
+        # B x T x C -> T x B x C
+        x_topic = x_topic.transpose(0, 1)
+
+        # temporal convolutions
+        for proj, conv in zip(self.projections_topic, self.convolutions_topic):
+            residual_topic = x_topic if proj is None else proj(x_topic)
+            x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
+            x_topic = conv(x_topic)
+            x_topic = F.glu(x_topic, dim=-1)
+            x_topic = (x_topic + residual_topic) * math.sqrt(0.5)
+
+        # T x B x C -> B x T x C
+        x_topic = x_topic.transpose(1, 0)
+
+        # project back to size of embedding
+        x_topic = self.fc2_topic(x_topic)
+
+        # scale gradients (this only affects backward, not forward)
+        x_topic = grad_multiply(x_topic, 1.0 / (2.0 * self.num_attention_layers))
+
+        # add output to input embedding for attention
+        y_topic = (x_topic + input_embedding_topic) * math.sqrt(0.5)
+        
         print("Encoder x output size:"+str(x.size()))
         print("Encoder y output size:"+str(y.size()))
-        return x, y
+        return x, y, x_topic, y_topic
 
 
 class AttentionLayer(nn.Module):
@@ -162,6 +220,7 @@ class AttentionLayer(nn.Module):
 
         # softmax over last dim
         sz = x.size()
+        ###print("sz size:"+str(sz))  ###[108, 12, 37]
         x = F.softmax(x.view(sz[0] * sz[1], sz[2]))
         x = x.view(sz)
         attn_scores = x
@@ -177,6 +236,52 @@ class AttentionLayer(nn.Module):
         
         print("AttentionLayer x output size:"+str(x.size()))
         print("AttentionLayer attn_scores output size:"+str(attn_scores.size()))
+        """
+        Encoder:x:torch.Size([129, 31, 256])
+        Encoder x output size:torch.Size([129, 31, 256])
+        Encoder y output size:torch.Size([129, 31, 256])
+        AttentionLayer x output size:torch.Size([129, 11, 256])
+        AttentionLayer attn_scores output size:torch.Size([129, 11, 31])
+        """
+        return x, attn_scores
+    
+class AttentionLayer_Topic(nn.Module):
+    def __init__(self, conv_channels, embed_dim, bmm=None):
+        super(AttentionLayer_Topic, self).__init__()
+        # projects from output of convolution to embedding dimension
+        self.in_projection = Linear(conv_channels, embed_dim)
+        # projects from embedding dimension to convolution size
+        self.out_projection = Linear(embed_dim, conv_channels)
+
+        self.bmm = bmm if bmm is not None else torch.bmm
+
+    def forward(self, x, target_embedding, encoder_out):
+        residual = x
+
+        # attention
+        x = (self.in_projection(x) + target_embedding) * math.sqrt(0.5)   
+        ###x = self.bmm(x, encoder_out[0])
+        x = self.bmm(x, (encoder_out[0]+encoder_out[1]))
+
+        # softmax over last dim
+        sz = x.size()
+        print("sz size:"+str(sz))
+        x = F.softmax(x.view(sz[0] * sz[1], sz[2]))
+        x = x.view(sz)
+        attn_scores = x
+
+        ###x = self.bmm(x, encoder_out[1])
+        x = self.bmm(x, encoder_out[2])
+
+        # scale attention output
+        s = encoder_out[2].size(1)
+        x = x * (s * math.sqrt(1.0 / s))
+
+        # project back
+        x = (self.out_projection(x) + residual) * math.sqrt(0.5)
+        
+        print("AttentionLayer_Topic x output size:"+str(x.size()))
+        print("AttentionLayer_Topic attn_scores output size:"+str(attn_scores.size()))
         return x, attn_scores
 
 
@@ -184,7 +289,7 @@ class Decoder(nn.Module):
     """Convolutional decoder"""
     def __init__(self, num_embeddings, embed_dim=512, out_embed_dim=256,
                  max_positions=1024, convolutions=((512, 3),) * 20,
-                 attention=True, dropout=0.1, padding_idx=1):
+                 attention=True, attention_topic=True,dropout=0.1, padding_idx=1):
         super(Decoder, self).__init__()
         self.dropout = dropout
 
@@ -192,6 +297,10 @@ class Decoder(nn.Module):
         if isinstance(attention, bool):
             # expand True into [True, True, ...] and do the same with False
             attention = [attention] * len(convolutions)
+            
+        if isinstance(attention_topic, bool):
+            # expand True into [True, True, ...] and do the same with False
+            attention_topic = [attention_topic] * len(convolutions)
 
         self.embed_tokens = Embedding(num_embeddings, embed_dim, padding_idx)
         self.embed_positions = Embedding(max_positions, embed_dim, padding_idx)
@@ -199,6 +308,7 @@ class Decoder(nn.Module):
         self.projections = nn.ModuleList()
         self.convolutions = nn.ModuleList()
         self.attention = nn.ModuleList()
+        self.attention_topic = nn.ModuleList()
         for i, (out_channels, kernel_size) in enumerate(convolutions):
             pad = kernel_size - 1
             self.projections.append(Linear(in_channels, out_channels)
@@ -208,6 +318,8 @@ class Decoder(nn.Module):
                                  padding=pad, dropout=dropout))
             self.attention.append(AttentionLayer(out_channels, embed_dim)
                                   if attention[i] else None)
+            self.attention_topic.append(AttentionLayer_Topic(out_channels, embed_dim)
+                                  if attention_topic[i] else None)
             in_channels = out_channels
         self.fc2 = Linear(in_channels, out_embed_dim)
         self.fc3 = Linear(out_embed_dim, num_embeddings, dropout=dropout)
@@ -224,8 +336,9 @@ class Decoder(nn.Module):
         x = self.fc1(x)
 
         # transpose only once to speed up attention layers
-        encoder_a, encoder_b = encoder_out
+        encoder_a, encoder_b, encoder_a_topic, encoder_b_topic = encoder_out
         encoder_a = encoder_a.transpose(1, 2).contiguous()
+        encoder_a_topic = encoder_a_topic.transpose(1, 2).contiguous()
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -255,9 +368,48 @@ class Decoder(nn.Module):
         x = self.fc2(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.fc3(x)
+        
+        ###########topic channel
+        # embed tokens and positions
+        x_topic = self.embed_tokens(tokens) + self.embed_positions(positions)
+        x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
+        target_embedding = x_topic
+
+        # project to size of convolution
+        x_topic = self.fc1(x_topic)
+
+        # B x T x C -> T x B x C
+        x_topic = x_topic.transpose(0, 1)
+
+        # temporal convolutions
+        for proj, conv, attention_topic in zip(self.projections, self.convolutions, self.attention_topic):
+            residual_topic = x_topic if proj is None else proj(x_topic)
+
+            x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
+            x_topic = conv(x_topic)
+            x_topic = conv.remove_future_timesteps(x_topic)
+            x_topic = F.glu(x_topic)
+
+            # attention
+            if attention_topic is not None:
+                x_topic = x_topic.transpose(1, 0)
+                x_topic, _ = attention_topic(x_topic, target_embedding, (encoder_a, encoder_a_topic, encoder_b_topic))
+                x_topic = x_topic.transpose(1, 0)
+
+            # residual
+            x_topic = (x_topic + residual_topic) * math.sqrt(0.5)
+
+        # T x B x C -> B x T x C
+        x_topic = x_topic.transpose(1, 0)
+
+        # project back to size of vocabulary
+        x_topic = self.fc2(x_topic)
+        x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
+        x_topic = self.fc3(x_topic)
  
-        print("Decoder x output size:"+str(x.size()))
-        return x
+        print("Decoder x output size:"+str(x.size()))  ###Decoder x output size:torch.Size([108, 12, 8789])
+        print("Decoder x_topic output size:"+str(x_topic.size()))
+        return x+x_topic
 
     def context_size(self):
         """Maximum number of input elements each output element depends on"""
@@ -518,10 +670,12 @@ def parse_arch(args):
     # default architecture
     args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 512)
     args.encoder_layers = getattr(args, 'encoder_layers', '[(512, 3)] * 20')
+    args.encoder_layers_topic = getattr(args, 'encoder_layers', '[(512, 3)] * 20')
     args.decoder_embed_dim = getattr(args, 'decoder_embed_dim', 512)
     args.decoder_layers = getattr(args, 'decoder_layers', '[(512, 3)] * 20')
     args.decoder_out_embed_dim = getattr(args, 'decoder_out_embed_dim', 256)
     args.decoder_attention = getattr(args, 'decoder_attention', 'True')
+    args.decoder_attention_topic = getattr(args, 'decoder_attention_topic', 'True')
     return args
 
 def random_list_generate(min_value,max_value,list_size):  ######generate random numbers which mean 0, stddev 0.1
@@ -563,6 +717,7 @@ def build_model(args, dataset):
         
     vocab_topic, topic_embedding = zip(*[_.split("\t") for _ in vocab_topic])
     ###vocab_topic, topic_embedding = zip(*[ [_.split(" ")[0], ' '.join(_.split(" ")[1:257])] for _ in vocab_topic])
+    ###topic_embedding = [list( float(_) for _ in _.split(" ") ) for _ in topic_embedding]
     topic_embedding = [list( float(_) for _ in _.split(" ") ) for _ in topic_embedding]
       
     topic_embedding=np.array(topic_embedding)
@@ -576,7 +731,7 @@ def build_model(args, dataset):
     
     ##vacab_topic_dict = []
     src_dict_word_idx = dataset.src_dict.indices
-    vocab_topic_emb = [[float(0)]*topic_emb_size]*len(src_dict_word_idx)
+    vocab_topic_emb = [[float(0.0)]*topic_emb_size]*len(src_dict_word_idx)
     for word in src_dict_word_idx.keys():
         if word in vocab_topic:
             ##vacab_topic_dict.append(topic_embedding[vocab_topic.index(vocab[vocab_idx])])
@@ -591,6 +746,7 @@ def build_model(args, dataset):
         len(dataset.src_dict),
         embed_dim=args.encoder_embed_dim,
         convolutions=eval(args.encoder_layers),
+        convolutions_topic=eval(args.encoder_layers_topic),
         dropout=args.dropout,
         padding_idx=padding_idx,
         max_positions=args.max_positions,
@@ -602,6 +758,7 @@ def build_model(args, dataset):
         convolutions=eval(args.decoder_layers),
         out_embed_dim=args.decoder_out_embed_dim,
         attention=eval(args.decoder_attention),
+        attention_topic=eval(args.decoder_attention_topic),
         dropout=args.dropout,
         padding_idx=padding_idx,
         max_positions=args.max_positions,

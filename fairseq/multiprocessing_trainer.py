@@ -153,6 +153,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         if self._sample is not None:
             ###print("self._sample['net_input']"+str(self._sample['net_input'])) ###id,src_tokens,input_tokens,input_positions,target,src_positions,ntokens
             net_output = self.model(**self._sample['net_input'])
+            ###print("self._sample['net_input']"+str(self._sample['net_input']))
             loss_ = criterion(net_output, self._sample)
             loss_.backward()
             loss = loss_.data[0]
