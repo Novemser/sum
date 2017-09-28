@@ -79,9 +79,9 @@ class Encoder(nn.Module):
         ###print("self.embed_tokens:"+str(self.embed_tokens))
         ###print("emb type norm:"+str(self.embed_tokens.norm_type)) ###2
         
-        ###self.embed_tokens_topic = nn.Embedding(num_embeddings, embed_dim, padding_idx)
-        self.embed_tokens_topic = Embedding(num_embeddings, embed_dim, padding_idx)
-        ###self.embed_tokens_topic.weight = nn.Parameter(vocab_topic_emb)
+        self.embed_tokens_topic = nn.Embedding(num_embeddings, embed_dim, padding_idx)
+        ###self.embed_tokens_topic = Embedding(num_embeddings, embed_dim, padding_idx)
+        self.embed_tokens_topic.weight = nn.Parameter(vocab_topic_emb)
         
         print("Encoder:padding_idx:"+str(padding_idx))
         print("Encoder:self.embed_tokens:"+str(self.embed_tokens))
