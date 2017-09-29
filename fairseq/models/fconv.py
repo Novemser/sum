@@ -125,7 +125,7 @@ class Encoder(nn.Module):
 
     def forward(self, tokens, positions):
         # embed tokens and positions
-        x = self.embed_tokens(tokens).float() + self.embed_positions(positions).float()
+        x = self.embed_tokens(tokens) + self.embed_positions(positions)
         ###print("Encoder: tokens:"+str(tokens.size()))  ###[108,37]
         ###print("Encoder:x:"+str(x.size()))  ###x:B,T,D
         ###print("x:"+str(x))
@@ -162,9 +162,10 @@ class Encoder(nn.Module):
         ####################topic encoder
         ###print("self.embed_tokens_topic(tokens):"+str(type(self.embed_tokens_topic(tokens))))
         ###print("self.embed_positions(positions):"+str(type(self.embed_positions(positions))))
-        x_topic = self.embed_tokens_topic(tokens).float() + self.embed_positions(positions).float()
+        x_topic = self.embed_tokens_topic(tokens) + self.embed_positions(positions)
         ###print("x_topic:"+str(x_topic))
-        print("x_topic size:"+str(x_topic.size()))
+        ###print("x_topic size:"+str(x_topic.size()))
+        ###x_topic size:torch.Size([129, 31, 256])
         
         x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
         input_embedding_topic = x_topic
@@ -238,8 +239,8 @@ class AttentionLayer(nn.Module):
         # project back
         x = (self.out_projection(x) + residual) * math.sqrt(0.5)
         
-        print("AttentionLayer x output size:"+str(x.size()))
-        print("AttentionLayer attn_scores output size:"+str(attn_scores.size()))
+        ###print("AttentionLayer x output size:"+str(x.size()))
+        ###print("AttentionLayer attn_scores output size:"+str(attn_scores.size()))
         """
         Encoder:x:torch.Size([129, 31, 256])
         Encoder x output size:torch.Size([129, 31, 256])
@@ -263,8 +264,12 @@ class AttentionLayer_Topic(nn.Module):
         residual = x
 
         # attention
-        print("self.in_projection_topic(x):"+str(self.in_projection_topic(x).size()))
-        print("target_embedding:"+str(target_embedding.size()))
+        ###print("self.in_projection_topic(x):"+str(self.in_projection_topic(x).size()))
+        ###print("target_embedding:"+str(target_embedding.size()))
+        """
+        self.in_projection_topic(x):torch.Size([95, 15, 256])
+        target_embedding:torch.Size([95, 15, 256])
+        """
         x = (self.in_projection_topic(x) + target_embedding) * math.sqrt(0.5)   
         ###x = self.bmm(x, encoder_out[0])
         x = self.bmm(x, (encoder_out[0]+encoder_out[1]))
@@ -403,13 +408,13 @@ class Decoder(nn.Module):
         target_embedding_topic = x_topic
 
         # project to size of convolution
-        x_topic = self.fc1(x_topic)
+        x_topic = self.fc1_topic(x_topic)
 
         # B x T x C -> T x B x C
         x_topic = x_topic.transpose(0, 1)
 
-        # temporal convolutions
-        for proj, conv, attention_topic in zip(self.projections, self.convolutions, self.attention_topic):
+        # temporal convolutions_topic
+        for proj, conv, attention_topic in zip(self.projections_topic, self.convolutions_topic, self.attention_topic):
             residual_topic = x_topic if proj is None else proj(x_topic)
 
             x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
@@ -417,7 +422,7 @@ class Decoder(nn.Module):
             x_topic = conv.remove_future_timesteps(x_topic)
             x_topic = F.glu(x_topic)
 
-            # attention
+            # attention_topic
             if attention_topic is not None:
                 x_topic = x_topic.transpose(1, 0)
                 x_topic, _ = attention_topic(x_topic, target_embedding_topic, (encoder_a, encoder_a_topic, encoder_b_topic))
@@ -430,12 +435,12 @@ class Decoder(nn.Module):
         x_topic = x_topic.transpose(1, 0)
 
         # project back to size of vocabulary
-        x_topic = self.fc2(x_topic)
+        x_topic = self.fc2_topic(x_topic)
         x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
-        x_topic = self.fc3(x_topic)
+        x_topic = self.fc3_topic(x_topic)
  
-        print("Decoder x output size:"+str(x))  ###Decoder x output size:torch.Size([108, 12, 8789])
-        print("Decoder x_topic output size:"+str(x_topic))
+        ###print("Decoder x output size:"+str(x))  ###Decoder x output size:torch.Size([108, 12, 8789])
+        ###print("Decoder x_topic output size:"+str(x_topic))
         return (x+x_topic)
 
     def context_size(self):
@@ -780,7 +785,7 @@ def build_model(args, dataset):
         dropout=args.dropout,
         padding_idx=padding_idx,
         max_positions=args.max_positions,
-        vocab_topic_emb=torch.from_numpy(np.array(vocab_topic_emb)),
+        vocab_topic_emb=torch.from_numpy(np.array(vocab_topic_emb)).float(),
     )
     decoder = Decoder(
         len(dataset.dst_dict),
