@@ -130,7 +130,10 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             self.call_async(rank, '_async_train_step', criterion=criterion)
             for rank in range(self.num_replicas)
         ]
+        """
         print("train step losses:"+str(losses))
+        ######train step losses:[<fairseq.multiprocessing_event_loop.Future object at 0x7f36352c1b70>]
+        """
 
         # aggregate losses and gradient norms
         losses, grad_norms = Future.gen_tuple_list(losses)
@@ -153,7 +156,20 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         if self._sample is not None:
             ###print("self._sample['net_input']"+str(self._sample['net_input'])) ###id,src_tokens,input_tokens,input_positions,target,src_positions,ntokens
             net_output = self.model(**self._sample['net_input'])
-            ###print("self._sample['net_input']"+str(self._sample['net_input']))
+            """
+            print("net_output"+str(net_output))
+            net_output(Variable containing:
+            -1.2870e-01 -1.1751e-01  1.9118e-01  ...  -6.9989e-02  2.1065e-01 -6.7023e-02
+                            ...                   ⋱                   ...                
+            -1.0802e-01 -8.0520e-02 -1.6377e-02  ...  -2.1818e-01  3.7657e-02 -2.1260e-01
+            [torch.cuda.FloatTensor of size 1296x8789 (GPU 0)]
+            , Variable containing:
+             1.0061e-01  2.6731e-01 -5.6256e-01  ...  -1.5802e-01 -3.3527e-01  2.2366e-01
+                            ...                   ⋱                   ...                
+             1.2779e-01 -2.4646e-01  2.0574e-01  ...  -1.9095e-01 -2.7890e-01 -1.5884e-01
+            [torch.cuda.FloatTensor of size 1296x8789 (GPU 0)]
+            )
+            """
             loss_ = criterion(net_output, self._sample)
             print("loss_"+str(loss_))
             loss_.backward()

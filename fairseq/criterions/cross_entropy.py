@@ -22,18 +22,18 @@ class CrossEntropyCriterion(FairseqCriterion):
         self.denom = sum(s['ntokens'] if s else 0 for s in samples)
 
     def forward(self, net_output, sample):
-        print("net_output.size():"+str(net_output.size()))
+        ###print("net_output.size():"+str(net_output.size()))
         input = net_output.view(-1, net_output.size(-1)) ###no softmax yet
         target = sample['target'].view(-1)
-        print("CrossEntropyCriterion input:"+str(input)+" sum(input[0])"+str(sum(input[0])))
-        print("sum(input[0])"+str(sum(input[0])))
-        print("CrossEntropyCriterion input:"+str(input.size(0))+" "+str(input.size(1)))
-        print("CrossEntropyCriterion target:"+str(target.size(0)))
-        print("self.padding_idx:"+str(self.padding_idx))
+        ###print("CrossEntropyCriterion input:"+str(input)+" sum(input[0])"+str(sum(input[0])))
+        ###print("sum(input[0])"+str(sum(input[0])))
+        ###print("CrossEntropyCriterion input:"+str(input.size(0))+" "+str(input.size(1)))
+        ###print("CrossEntropyCriterion target:"+str(target.size(0)))
+        ###print("self.padding_idx:"+str(self.padding_idx))
         loss = F.cross_entropy(input, target, size_average=False, ignore_index=self.padding_idx)
-        print("loss:"+str(loss))
-        print("self.denom:"+str(self.denom))
-        print("loss / self.denom :"+str(loss / self.denom))
+        ###print("loss:"+str(loss))
+        ###print("self.denom:"+str(self.denom))
+        ###print("loss / self.denom :"+str(loss / self.denom))
         return loss / self.denom
 
     def aggregate(self, losses):
