@@ -17,7 +17,7 @@ from fairseq import utils
 
 class SequenceGenerator(object):
     def __init__(self, models, dst_dict, beam_size=1, minlen=1, maxlen=200,
-                 stop_early=True, normalize_scores=True, len_penalty=1):
+                 stop_early=True, normalize_scores=True, len_penalty=1, sample=False):
         """Generates translations of a given source sentence.
 
         Args:
@@ -41,6 +41,7 @@ class SequenceGenerator(object):
         self.stop_early = stop_early
         self.normalize_scores = normalize_scores
         self.len_penalty = len_penalty
+        self.sample = sample
 
     def cuda(self):
         for model in self.models:
@@ -78,14 +79,18 @@ class SequenceGenerator(object):
                 ref = lstrip_pad(s['target'].data[i, :])
                 yield id, src, ref, hypos[i]
 
-    def generate(self, src_tokens, src_positions, beam_size=None, maxlen=None):
+    def generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, sample=None):
         """Generate a batch of translations."""
         with ExitStack() as stack:
             for model in self.models:
                 stack.enter_context(model.decoder.incremental_inference())
-            return self._generate(src_tokens, src_positions, beam_size, maxlen)
+            return self._generate(src_tokens, src_positions, beam_size, maxlen, sample)
 
-    def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None):
+    def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, sample=None):
+        sample = sample if sample is not None else self.sample
+        # if sample mode, beam_size must be 1
+        if sample:
+            assert beam_size == 1
         bsz = src_tokens.size(0)
         beam_size = beam_size if beam_size is not None else self.beam_size
         maxlen = min(maxlen, self.maxlen) if maxlen is not None else self.maxlen
@@ -229,7 +234,11 @@ class SequenceGenerator(object):
             cand_scores = buffer('cand_scores', type_of=scores)
             cand_indices = buffer('cand_indices')
             cand_beams = buffer('cand_beams')
-            probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
+            if sample:
+                torch.multinomial(probs.view(bsz, -1), 1, replacement=False, out=cand_indices)
+                cand_scores = torch.index_select(probs.view(bsz, -1), dim=0, cand_indices)
+            else:
+                probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
             torch.div(cand_indices, self.vocab_size, out=cand_beams)
             cand_indices.fmod_(self.vocab_size)
 
