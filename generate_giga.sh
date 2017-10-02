@@ -1,6 +1,6 @@
 ###python3 generate.py data_giga_bin --path checkpoints/fconv/checkpoint_best.pt --batch-size 128 --beam 5
 
-python3 generate.py data_giga_bin2 --path checkpoints/fconv/checkpoint_best.pt --beam 5 --batch-size 128 --remove-bpe | tee > ./output/result
+CUDA_VISIBLE_DEVICES=1 python3 generate.py data_giga_bin --path checkpoints/fconv/checkpoint_best.pt --beam 5 --batch-size 128 --lenpen 0.5 --remove-bpe | tee > ./output/result
 
 : <<END
 ...
