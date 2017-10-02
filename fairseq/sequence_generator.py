@@ -89,12 +89,12 @@ class SequenceGenerator(object):
     def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, sample=None):
         sample = sample if sample is not None else self.sample
         # if sample mode, beam_size must be 1
-        if sample:
-            assert beam_size == 1
         bsz = src_tokens.size(0)
         beam_size = beam_size if beam_size is not None else self.beam_size
         maxlen = min(maxlen, self.maxlen) if maxlen is not None else self.maxlen
 
+        if sample:
+            assert beam_size == 1
         encoder_outs = []
         for model in self.models:
             model.eval()
