@@ -236,7 +236,7 @@ class SequenceGenerator(object):
             cand_beams = buffer('cand_beams')
             if sample:
                 torch.multinomial(probs.view(bsz, -1), 1, replacement=False, out=cand_indices)
-                cand_scores = torch.index_select(probs.view(bsz, -1), dim=0, cand_indices)
+                torch.index_select(probs.view(bsz, -1), 0, cand_indices, out=cand_scores)
             else:
                 probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
             torch.div(cand_indices, self.vocab_size, out=cand_beams)
