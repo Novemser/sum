@@ -35,6 +35,7 @@ def main():
     options.add_optimization_args(parser)
     options.add_checkpoint_args(parser)
     options.add_model_args(parser)
+    options.add_generation_args(parser) # should specify generation parameters!!
 
     args = utils.parse_args_and_arch(parser)
     print(args)

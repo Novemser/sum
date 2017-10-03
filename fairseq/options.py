@@ -59,6 +59,8 @@ def add_optimization_args(parser):
                        help='If bigger than 0, use that number of mini-batches for each epoch,'
                             ' where each sample is drawn randomly with replacement from the'
                             ' dataset')
+    group.add_argument('-enable_rl', action='store_false',
+                       help='enable reinforcement learning, default is False')
     return group
 
 
@@ -104,7 +106,7 @@ def add_generation_args(parser):
                        help='length penalty: <1.0 favors shorter, >1.0 favors longer sentences')
     group.add_argument('--unk-replace-dict', default='', type=str,
                        help='performs unk word replacement')
-    group.add_argument('-sample', action='store_true',
+    group.add_argument('-enable_sample', action='store_true',
                       help='decode in sample mode')
 
     return group
