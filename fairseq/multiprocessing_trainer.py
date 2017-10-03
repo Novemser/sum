@@ -46,11 +46,23 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         Future.gen_list([
             self.call_async(rank, '_async_init', args=args, model=model,
-                            nccl_uid=nccl_uid, dataset=dataset)
+                            nccl_uid=nccl_uid)
             for rank in range(self.num_replicas)
         ])
+            
+        self.dataset = dataset
+        self.enable_rl = args.enable_rl
+        self.generator = None
+        self.args = args
+        if self.enable_rl:
+            # Initialize generator
+            models = [model] # SequenceGenerator accepts a list of models
+            self.generator = SequenceGenerator(models, dataset.dst_dict, beam_size=args.beam,
+                                           stop_early=(not args.no_early_stop),
+                                           normalize_scores=(not args.unnormalized),
+                                           len_penalty=args.lenpen)
 
-    def _async_init(self, rank, device_id, args, model, nccl_uid, dataset=None):
+    def _async_init(self, rank, device_id, args, model, nccl_uid):
         """Initialize child processes."""
         self.args = args
 
@@ -74,19 +86,6 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         # initialize LR scheduler
         self.lr_scheduler = self._build_lr_scheduler()
-
-        self.enable_rl = args.enable_rl
-
-        self.generator = None
-        
-        if self.enable_rl:
-            # Initialize generator
-            models = [model] # SequenceGenerator accepts a list of models
-            self.generator = SequenceGenerator(models, dataset.dst_dict, beam_size=args.beam,
-                                           stop_early=(not args.no_early_stop),
-                                           normalize_scores=(not args.unnormalized),
-                                           len_penalty=args.lenpen,
-                                           sample=args.sample)
 
     def _build_lr_scheduler(self):
         if self.args.force_anneal > 0:
