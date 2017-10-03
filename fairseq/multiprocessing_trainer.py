@@ -138,6 +138,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         """Do forward, backward and gradient step in parallel."""
         assert isinstance(criterion, FairseqCriterion)
 
+        '''
         # If enable_rl, generate two outputs in inference model
         # 1) greedy
         # 2) sampled
@@ -156,6 +157,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 cuda_device=0 if use_cuda else None, timer=None,
                 enable_sample=False)
             print(sampled_output)
+        '''
 
         # scatter sample across GPUs
         self._scatter_samples(samples)
@@ -176,6 +178,25 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     def _async_train_step(self, rank, device_id, criterion, rl_loss=None):
         self.model.train()
 
+        # If enable_rl, generate two outputs in inference model
+        # 1) greedy
+        # 2) sampled
+        if self.enable_rl:
+            args = self.args
+            cur_model = copy.deepcopy(self.get_model) # deep copy current model, since once made generation fast, cannot be trained
+            cur_model.make_generation_fast_(args.beam, not args.no_beamable_mm) # for fast generation
+            self.generator.models = [cur_model]
+            use_cuda = torch.cuda.is_available() and not args.cpu
+            sampled_output = self.generator.generate_batched_itr(
+                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
+                cuda_device=0 if use_cuda else None, timer=None,
+                enable_sample=True)
+            greedy_output = self.generator.generate_batched_itr(
+                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
+                cuda_device=0 if use_cuda else None, timer=None,
+                enable_sample=False)
+            print(sampled_output)
+            
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
 
