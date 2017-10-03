@@ -34,7 +34,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     """
 
     def __init__(self, args, model, device_ids=None,
-                 multiprocessing_method='spawn', dataset=None):
+                 multiprocessing_method='spawn', dst_dict=None):
         if device_ids is None:
             device_ids = tuple(range(torch.cuda.device_count()))
         super().__init__(device_ids, multiprocessing_method)
@@ -45,12 +45,15 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         nccl_uid = nccl.get_unique_id()
 
         Future.gen_list([
-            self.call_async(rank, '_async_init', args=args, model=model, dataset=dataset
+            self.call_async(rank, '_async_init', args=args, model=model, dst_dict=dst_dict,
                             nccl_uid=nccl_uid)
             for rank in range(self.num_replicas)
         ])
+            
+        self.enable_rl = args.enable_rl
+        self.args = args
 
-    def _async_init(self, rank, device_id, args, model, nccl_uid, dataset=None):
+    def _async_init(self, rank, device_id, args, model, nccl_uid, dst_dict=None):
         """Initialize child processes."""
         self.args = args
 
@@ -75,14 +78,14 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # initialize LR scheduler
         self.lr_scheduler = self._build_lr_scheduler()
 
-        self.dataset = dataset
+        self.dst_dict = dst_dict
         self.enable_rl = args.enable_rl
         self.generator = None
         self.args = args
         if self.enable_rl:
             # Initialize generator
             models = [model] # SequenceGenerator accepts a list of models
-            self.generator = SequenceGenerator(models, dataset.dst_dict, beam_size=args.beam,
+            self.generator = SequenceGenerator(models, dst_dict, beam_size=args.beam,
                                            stop_early=(not args.no_early_stop),
                                            normalize_scores=(not args.unnormalized),
                                            len_penalty=args.lenpen)
