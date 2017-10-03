@@ -70,7 +70,7 @@ class SequenceGenerator(object):
             if timer is not None:
                 timer.start()
             hypos = self.generate(input['src_tokens'], input['src_positions'],
-                                  maxlen=(maxlen_a*srclen + maxlen_b), enable_sample)
+                                  maxlen=(maxlen_a*srclen + maxlen_b), enable_sample=enable_sample)
             if timer is not None:
                 timer.stop(s['ntokens'])
             for i, id in enumerate(s['id']):

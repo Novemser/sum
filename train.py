@@ -71,7 +71,7 @@ def main():
     criterion = utils.build_criterion(args, dataset)
 
     # Start multiprocessing
-    trainer = MultiprocessingTrainer(args, model)
+    trainer = MultiprocessingTrainer(args, model, dataset)
 
     # Load the latest checkpoint if one is available
     epoch, batch_offset = trainer.load_checkpoint(os.path.join(args.save_dir, args.restore_file))
