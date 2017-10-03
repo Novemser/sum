@@ -14,10 +14,12 @@ import torch
 from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
 
 from fairseq import nccl, utils
+from fairseq.sequence_generator import SequenceGenerator
 from fairseq.criterions import FairseqCriterion
 from fairseq.multiprocessing_event_loop import MultiprocessingEventLoop, Future
 from fairseq.nag import NAG
 
+import copy
 
 class MultiprocessingTrainer(MultiprocessingEventLoop):
     """Main class for multi-GPU training.
@@ -32,7 +34,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     """
 
     def __init__(self, args, model, device_ids=None,
-                 multiprocessing_method='spawn'):
+                 multiprocessing_method='spawn', dataset=None):
         if device_ids is None:
             device_ids = tuple(range(torch.cuda.device_count()))
         super().__init__(device_ids, multiprocessing_method)
@@ -47,6 +49,15 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                             nccl_uid=nccl_uid)
             for rank in range(self.num_replicas)
         ])
+
+        self.enable_rl = args.enable_rl
+        # Initialize generator
+        models = [model] # SequenceGenerator accepts a list of models
+        self.generator = SequenceGenerator(models, dataset.dst_dict, beam_size=args.beam,
+                                       stop_early=(not args.no_early_stop),
+                                       normalize_scores=(not args.unnormalized),
+                                       len_penalty=args.lenpen,
+                                       sample=args.sample)
 
     def _async_init(self, rank, device_id, args, model, nccl_uid):
         """Initialize child processes."""
@@ -121,13 +132,32 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         """Do forward, backward and gradient step in parallel."""
         assert isinstance(criterion, FairseqCriterion)
 
+        # If enable_rl, generate two outputs in inference model
+        # 1) greedy
+        # 2) sampled
+        if self.enable_rl:
+            args = self.args
+            cur_model = copy.deepcopy(self.get_model) # deep copy current model, since once made generation fast, cannot be trained
+            cur_model.make_generation_fast_(args.beam, not args.no_beamable_mm) # for fast generation
+            self.generator.models = [cur_model]
+            use_cuda = torch.cuda.is_available() and not args.cpu
+            sampled_output = self.generator.generate_batched_itr(
+                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
+                cuda_device=0 if use_cuda else None, timer=None,
+                enable_sample=True)
+            greedy_output = self.generator.generate_batched_itr(
+                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
+                cuda_device=0 if use_cuda else None, timer=None,
+                enable_sample=False)
+            print(sampled_output)
+
         # scatter sample across GPUs
         self._scatter_samples(samples)
         criterion.prepare(samples)
 
         # forward pass, backward pass and gradient step
         losses = [
-            self.call_async(rank, '_async_train_step', criterion=criterion)
+            self.call_async(rank, '_async_train_step', criterion=criterion, rl_loss=None)
             for rank in range(self.num_replicas)
         ]
 
@@ -137,7 +167,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         return loss, grad_norms[0]
 
-    def _async_train_step(self, rank, device_id, criterion):
+    def _async_train_step(self, rank, device_id, criterion, rl_loss=None):
         self.model.train()
 
         # zero grads even if net_input is None, since we will all-reduce them
@@ -147,6 +177,9 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         loss = 0
         if self._sample is not None:
             net_output = self.model(**self._sample['net_input'])
+            # what is net_output
+            # what is output of model.decode()
+            # how to transform them to string?
             loss_ = criterion(net_output, self._sample)
             loss_.backward()
             loss = loss_.data[0]
