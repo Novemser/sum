@@ -85,10 +85,10 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         if self.enable_rl:
             # Initialize generator
             models = [model] # SequenceGenerator accepts a list of models
-            self.generator = SequenceGenerator(models, dst_dict, beam_size=args.beam,
+            self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
                                            stop_early=(not args.no_early_stop),
                                            normalize_scores=(not args.unnormalized),
-                                           len_penalty=args.lenpen)
+                                           len_penalty=args.lenpen).cuda()
 
     def _build_lr_scheduler(self):
         if self.args.force_anneal > 0:
@@ -158,7 +158,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 enable_sample=False)
             print(sampled_output)
         '''
-
+        print(len(samples))
         # scatter sample across GPUs
         self._scatter_samples(samples)
         criterion.prepare(samples)
@@ -183,19 +183,25 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # 2) sampled
         if self.enable_rl:
             args = self.args
-            cur_model = copy.deepcopy(self.get_model) # deep copy current model, since once made generation fast, cannot be trained
-            cur_model.make_generation_fast_(args.beam, not args.no_beamable_mm) # for fast generation
-            self.generator.models = [cur_model]
+            #cur_model = copy.deepcopy(self.get_model) # deep copy current model, since once made generation fast, cannot be trained
+            #cur_model.make_generation_fast_(args.beam, not args.no_beamable_mm) # for fast generation
+            self.generator.models = [self.model]
             use_cuda = torch.cuda.is_available() and not args.cpu
+            input = self._sample['net_input']
+            srclen = input['src_tokens'].size(1)
+            
+            '''
             sampled_output = self.generator.generate_batched_itr(
-                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
+                self.data_itr, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
                 cuda_device=0 if use_cuda else None, timer=None,
                 enable_sample=True)
             greedy_output = self.generator.generate_batched_itr(
-                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
+                self.data_itr, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
                 cuda_device=0 if use_cuda else None, timer=None,
                 enable_sample=False)
-            print(sampled_output)
+            for src, ref, hypo in sampled_output:
+                print('-----------')
+            '''
             
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
@@ -308,4 +314,5 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         if sample is None:
             self._sample = None
         else:
+            self.data_itr = [sample]
             self._sample = utils.prepare_sample(sample, volatile=volatile, cuda_device=device_id)
