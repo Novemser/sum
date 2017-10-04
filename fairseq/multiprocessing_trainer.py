@@ -196,7 +196,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 cuda_device=0 if use_cuda else None, timer=None,
                 enable_sample=False)
             print(sampled_output)
-            
+
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
 
@@ -308,4 +308,16 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         if sample is None:
             self._sample = None
         else:
+            '''
+            self._sample: {'id': LongTensor[181], 
+                            'ntokens': 1314, 
+                            'target': LongTensor[181*12], 
+                            'net_input': {
+                                'src_token': LongTensor[181*12],
+                                'src_position': LongTensor[181*12],
+                                'input_tokens': LongTensor[181*12],
+                                'input_position': LongTensor[181*12]
+                                }
+                            }
+            '''
             self._sample = utils.prepare_sample(sample, volatile=volatile, cuda_device=device_id)
