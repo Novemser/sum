@@ -160,16 +160,14 @@ def display_hypotheses(id, src, orig, ref, hypos, src_dict, dst_dict):
     bpe_symbol = '@@'
     id_str = '' if id is None else '-{}'.format(id)
     src_str = to_sentence(src_dict, src, bpe_symbol)
+    hypo_str = []
     print('S{}\t{}'.format(id_str, src_str))
     if orig is not None:
         print('O{}\t{}'.format(id_str, orig.strip()))
-    if ref is not None:
-        print('T{}\t{}'.format(id_str, to_sentence(dst_dict, ref, bpe_symbol, ref_unk=True)))
+    ref_str = to_sentence(dst_dict, ref, bpe_symbol, ref_unk=True)
     for hypo in hypos:
-        hypo_str = to_sentence(dst_dict, hypo['tokens'], bpe_symbol)
-        align_str = ' '.join(map(str, hypo['alignment']))
+        hypo_str.append(to_sentence(dst_dict, hypo['tokens'], bpe_symbol))
         # if args.unk_replace_dict != '':
         #    hypo_str = replace_unk(hypo_str, align_str, orig, unk_symbol(dst_dict))
-        print('H{}\t{}\t{}'.format(
-            id_str, hypo['score'], hypo_str))
-        print('A{}\t{}'.format(id_str, align_str))
+    return ref_str, hypo_str
+

@@ -180,24 +180,30 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 
                 greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
                                       maxlen=(args.max_len_a*srclen + args.max_len_b), 
-                                      enable_sample=True)
-                #sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
-                #                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
-                #                      enable_sample=True)
+                                      enable_sample=False)
+                sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                                     maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                                     enable_sample=True)
                 
-                res = {}
+                ref_hypo_triples = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
                 for i, id in enumerate(self._sample['id']):
                     src = input['src_tokens'].data[i, :]
                     # remove padding from ref, which appears at the beginning
                     ref = lstrip_pad(self._sample['target'].data[i, :])
-                    hypos = greedy_hypos[i]
+                    greedy_hypo = greedy_hypos[i]
+                    sampled_hypo = sampled_hypos[i]
 
                     ref = ref.int().cpu()
-                    utils.display_hypotheses(id, src, None, ref, 
-                                             hypos[:min(len(hypos), args.nbest)],
-                                             self.src_dict, self.dst_dict)
+                    ref_str, greedy_hypo_str = utils.display_hypotheses(id, src, None, ref, 
+                                                                         greedy_hypo[:min(len(greedy_hypo), args.nbest)],
+                                                                         self.src_dict, self.dst_dict)
+                    , sampled_hypo_str = utils.display_hypotheses(id, src, None, ref, 
+                                                                         sampled_hypo[:min(len(sampled_hypo), args.nbest)],
+                                                                         self.src_dict, self.dst_dict)
+                    ref_hypo_triples.append((ref_str, greedy_hypo_str, sampled_hypo_str))
 
-            generate()
+                return ref_hypo_triples
+            print(generate())
             
             
         # zero grads even if net_input is None, since we will all-reduce them
