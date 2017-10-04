@@ -158,7 +158,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 enable_sample=False)
             print(sampled_output)
         '''
-        print(len(samples))
+        
         # scatter sample across GPUs
         self._scatter_samples(samples)
         criterion.prepare(samples)
@@ -185,23 +185,34 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             args = self.args
             #cur_model = copy.deepcopy(self.get_model) # deep copy current model, since once made generation fast, cannot be trained
             #cur_model.make_generation_fast_(args.beam, not args.no_beamable_mm) # for fast generation
-            self.generator.models = [self.model]
-            use_cuda = torch.cuda.is_available() and not args.cpu
+            self.generator.models = [self.model]            
             input = self._sample['net_input']
             srclen = input['src_tokens'].size(1)
             
-            '''
-            sampled_output = self.generator.generate_batched_itr(
-                self.data_itr, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
-                cuda_device=0 if use_cuda else None, timer=None,
-                enable_sample=True)
-            greedy_output = self.generator.generate_batched_itr(
-                self.data_itr, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
-                cuda_device=0 if use_cuda else None, timer=None,
-                enable_sample=False)
-            for src, ref, hypo in sampled_output:
-                print('-----------')
-            '''
+            def generate():
+                """
+                Generate greedy and sampled outputs
+                """
+                def lstrip_pad(tensor):
+                    return tensor[tensor.eq(self.pad).sum():]
+                
+                greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                                      enable_sample=False)
+                sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                                      enable_sample=True)
+                
+                '''
+                res = {}
+                for i, id in enumerate(self._sample['id']):
+                    src = input['src_tokens'].data[i, :]
+                    # remove padding from ref, which appears at the beginning
+                    ref = lstrip_pad(s['target'].data[i, :])
+                    yield id, src, ref, hypos[i]
+                '''
+            
+            
             
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
@@ -314,5 +325,4 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         if sample is None:
             self._sample = None
         else:
-            self.data_itr = [sample]
             self._sample = utils.prepare_sample(sample, volatile=volatile, cuda_device=device_id)

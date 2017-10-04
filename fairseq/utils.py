@@ -135,3 +135,20 @@ def prepare_sample(sample, volatile=False, cuda_device=None):
             for key in ['src_tokens', 'src_positions', 'input_tokens', 'input_positions']
         },
     }
+
+def to_token(dict, i, runk):
+    return runk if i == dict.unk() else dict[i]
+
+def unk_symbol(dict, ref_unk=False):
+    return '<{}>'.format(dict.unk_word) if ref_unk else dict.unk_word
+
+def to_sentence(dict, tokens, bpe_symbol=None, ref_unk=False):
+    if torch.is_tensor(tokens) and tokens.dim() == 2:
+        sentences = [to_sentence(dict, token) for token in tokens]
+        return '\n'.join(sentences)
+    eos = dict.eos()
+    runk = unk_symbol(dict, ref_unk=ref_unk)
+    sent = ' '.join([to_token(dict, i, runk) for i in tokens if i != eos])
+    if bpe_symbol is not None:
+        sent = sent.replace(bpe_symbol, '')
+    return sent
