@@ -34,7 +34,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     """
 
     def __init__(self, args, model, device_ids=None,
-                 multiprocessing_method='spawn', dst_dict=None):
+                 multiprocessing_method='spawn', src_dist=None, dst_dict=None):
         if device_ids is None:
             device_ids = tuple(range(torch.cuda.device_count()))
         super().__init__(device_ids, multiprocessing_method)
@@ -45,7 +45,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         nccl_uid = nccl.get_unique_id()
 
         Future.gen_list([
-            self.call_async(rank, '_async_init', args=args, model=model, dst_dict=dst_dict,
+            self.call_async(rank, '_async_init', args=args, model=model, 
+                            src_dist=src_dist, dst_dict=dst_dict,
                             nccl_uid=nccl_uid)
             for rank in range(self.num_replicas)
         ])
@@ -53,7 +54,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.enable_rl = args.enable_rl
         self.args = args
 
-    def _async_init(self, rank, device_id, args, model, nccl_uid, dst_dict=None):
+    def _async_init(self, rank, device_id, args, model, nccl_uid, src_dist=None, dst_dict=None):
         """Initialize child processes."""
         self.args = args
 
@@ -78,6 +79,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # initialize LR scheduler
         self.lr_scheduler = self._build_lr_scheduler()
 
+        self.src_dist = src_dist
         self.dst_dict = dst_dict
         self.enable_rl = args.enable_rl
         self.generator = None
@@ -85,10 +87,10 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         if self.enable_rl:
             # Initialize generator
             models = [model] # SequenceGenerator accepts a list of models
-            self.generator = SequenceGenerator(models, dst_dict, beam_size=args.beam,
+            self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
                                            stop_early=(not args.no_early_stop),
                                            normalize_scores=(not args.unnormalized),
-                                           len_penalty=args.lenpen)
+                                           len_penalty=args.lenpen).cuda()
 
     def _build_lr_scheduler(self):
         if self.args.force_anneal > 0:
@@ -137,28 +139,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     def train_step(self, samples, criterion):
         """Do forward, backward and gradient step in parallel."""
         assert isinstance(criterion, FairseqCriterion)
-
-        '''
-        # If enable_rl, generate two outputs in inference model
-        # 1) greedy
-        # 2) sampled
-        if self.enable_rl:
-            args = self.args
-            cur_model = copy.deepcopy(self.get_model) # deep copy current model, since once made generation fast, cannot be trained
-            cur_model.make_generation_fast_(args.beam, not args.no_beamable_mm) # for fast generation
-            self.generator.models = [cur_model]
-            use_cuda = torch.cuda.is_available() and not args.cpu
-            sampled_output = self.generator.generate_batched_itr(
-                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
-                cuda_device=0 if use_cuda else None, timer=None,
-                enable_sample=True)
-            greedy_output = self.generator.generate_batched_itr(
-                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
-                cuda_device=0 if use_cuda else None, timer=None,
-                enable_sample=False)
-            print(sampled_output)
-        '''
-
+        
         # scatter sample across GPUs
         self._scatter_samples(samples)
         criterion.prepare(samples)
@@ -183,20 +164,40 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # 2) sampled
         if self.enable_rl:
             args = self.args
-            cur_model = copy.deepcopy(self.get_model) # deep copy current model, since once made generation fast, cannot be trained
-            cur_model.make_generation_fast_(args.beam, not args.no_beamable_mm) # for fast generation
-            self.generator.models = [cur_model]
-            use_cuda = torch.cuda.is_available() and not args.cpu
-            sampled_output = self.generator.generate_batched_itr(
-                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
-                cuda_device=0 if use_cuda else None, timer=None,
-                enable_sample=True)
-            greedy_output = self.generator.generate_batched_itr(
-                samples, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
-                cuda_device=0 if use_cuda else None, timer=None,
-                enable_sample=False)
-            print(sampled_output)
+            #cur_model = copy.deepcopy(self.get_model) # deep copy current model, since once made generation fast, cannot be trained
+            #cur_model.make_generation_fast_(args.beam, not args.no_beamable_mm) # for fast generation
+            self.generator.models = [self.model]            
+            input = self._sample['net_input']
+            srclen = input['src_tokens'].size(1)
+            
+            def generate():
+                """
+                Generate greedy and sampled outputs
+                """
+                def lstrip_pad(tensor):
+                    return tensor[tensor.eq(self.pad).sum():]
+                
+                greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                                      enable_sample=False)
+                sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                                      enable_sample=True)
+                
+                res = {}
+                for i, id in enumerate(self._sample['id']):
+                    src = input['src_tokens'].data[i, :]
+                    # remove padding from ref, which appears at the beginning
+                    ref = lstrip_pad(s['target'].data[i, :])
+                    hypos = greedy_hypos[i]
 
+                    ref = ref.int().cpu()
+                    top_hypo = hypos[0]['tokens'].int().cpu()
+                    display_hypotheses(id, src, None, ref, hypos[:min(len(hypos), args.nbest)])
+
+            
+            
+            
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
 

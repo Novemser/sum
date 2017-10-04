@@ -40,6 +40,7 @@ def main():
     args = utils.parse_args_and_arch(parser)
     print(args)
 
+    os.environ['CUDA_VISIBLE_DEVICES'] = '1' # TODO: add to options
     if args.no_progress_bar:
         progress_bar.enabled = False
         progress_bar.print_interval = args.log_interval

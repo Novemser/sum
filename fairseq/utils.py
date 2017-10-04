@@ -135,3 +135,41 @@ def prepare_sample(sample, volatile=False, cuda_device=None):
             for key in ['src_tokens', 'src_positions', 'input_tokens', 'input_positions']
         },
     }
+
+def to_token(dict, i, runk):
+    return runk if i == dict.unk() else dict[i]
+
+def unk_symbol(dict, ref_unk=False):
+    return '<{}>'.format(dict.unk_word) if ref_unk else dict.unk_word
+
+def to_sentence(dict, tokens, bpe_symbol=None, ref_unk=False):
+    if torch.is_tensor(tokens) and tokens.dim() == 2:
+        sentences = [to_sentence(dict, token) for token in tokens]
+        return '\n'.join(sentences)
+    eos = dict.eos()
+    runk = unk_symbol(dict, ref_unk=ref_unk)
+    sent = ' '.join([to_token(dict, i, runk) for i in tokens if i != eos])
+    if bpe_symbol is not None:
+        sent = sent.replace(bpe_symbol, '')
+    return sent
+
+def display_hypotheses(id, src, orig, ref, hypos, src_dict, dst_dict):
+    """
+    Dispaly hypos with bpe symbol always removed
+    """
+    bpe_symbol = '@@'
+    id_str = '' if id is None else '-{}'.format(id)
+    src_str = to_sentence(rc_dict, src, bpe_symbol)
+    print('S{}\t{}'.format(id_str, src_str))
+    if orig is not None:
+        print('O{}\t{}'.format(id_str, orig.strip()))
+    if ref is not None:
+        print('T{}\t{}'.format(id_str, to_sentence(dst_dict, ref, bpe_symbol, ref_unk=True)))
+    for hypo in hypos:
+        hypo_str = to_sentence(dst_dict, hypo['tokens'], bpe_symbol)
+        align_str = ' '.join(map(str, hypo['alignment']))
+        if args.unk_replace_dict != '':
+            hypo_str = replace_unk(hypo_str, align_str, orig, unk_symbol(dst_dict))
+        print('H{}\t{}\t{}'.format(
+            id_str, hypo['score'], hypo_str))
+        print('A{}\t{}'.format(id_str, align_str))
