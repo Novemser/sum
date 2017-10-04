@@ -161,7 +161,7 @@ def display_hypotheses(id, src, orig, ref, hypos, src_dict, dst_dict):
     id_str = '' if id is None else '-{}'.format(id)
     src_str = to_sentence(src_dict, src, bpe_symbol)
     hypo_str = []
-    print('S{}\t{}'.format(id_str, src_str))
+    # print('S{}\t{}'.format(id_str, src_str))
     if orig is not None:
         print('O{}\t{}'.format(id_str, orig.strip()))
     ref_str = to_sentence(dst_dict, ref, bpe_symbol, ref_unk=True)

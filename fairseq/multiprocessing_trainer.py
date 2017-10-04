@@ -197,7 +197,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                     ref_str, greedy_hypo_str = utils.display_hypotheses(id, src, None, ref, 
                                                                          greedy_hypo[:min(len(greedy_hypo), args.nbest)],
                                                                          self.src_dict, self.dst_dict)
-                    , sampled_hypo_str = utils.display_hypotheses(id, src, None, ref, 
+                    _, sampled_hypo_str = utils.display_hypotheses(id, src, None, ref, 
                                                                          sampled_hypo[:min(len(sampled_hypo), args.nbest)],
                                                                          self.src_dict, self.dst_dict)
                     ref_hypo_triples.append((ref_str, greedy_hypo_str, sampled_hypo_str))
