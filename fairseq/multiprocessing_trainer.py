@@ -164,9 +164,10 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # 2) sampled
         if self.enable_rl:
             args = self.args
-            #cur_model = copy.deepcopy(self.get_model) # deep copy current model, since once made generation fast, cannot be trained
-            #cur_model.make_generation_fast_(args.beam, not args.no_beamable_mm) # for fast generation
-            self.generator.models = [self.model]            
+            # since deepcopy does not support our case, we do not use fast generation
+            # cur_model = copy.deepcopy(self.model) # deep copy current model, since once made generation fast, cannot be trained
+            # cur_model.make_generation_fast_(1, not args.no_beamable_mm) # for fast generation
+            self.generator.models = [self.model]       
             input = self._sample['net_input']
             srclen = input['src_tokens'].size(1)
             
@@ -197,13 +198,18 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                     ref_str, greedy_hypo_str = utils.display_hypotheses(id, src, None, ref, 
                                                                          greedy_hypo[:min(len(greedy_hypo), args.nbest)],
                                                                          self.src_dict, self.dst_dict)
-                    , sampled_hypo_str = utils.display_hypotheses(id, src, None, ref, 
+                    _, sampled_hypo_str = utils.display_hypotheses(id, src, None, ref, 
                                                                          sampled_hypo[:min(len(sampled_hypo), args.nbest)],
                                                                          self.src_dict, self.dst_dict)
-                    ref_hypo_triples.append((ref_str, greedy_hypo_str, sampled_hypo_str))
+                    ref_hypo_triples.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0])) # beam_size = 1
 
                 return ref_hypo_triples
-            print(generate())
+            ref_hypo_triples = generate()
+            refs = [[[triple[0]]] for triple in ref_hypo_triples]
+            greedy_sums = [[triple[1]] for triple in ref_hypo_triples]
+            sampled_sums = [[triple[2]] for triple in ref_hypo_triples]
+            
+            # TODO: ROUGE, loss
             
             
         # zero grads even if net_input is None, since we will all-reduce them
