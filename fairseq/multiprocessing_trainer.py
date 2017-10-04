@@ -34,7 +34,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     """
 
     def __init__(self, args, model, device_ids=None,
-                 multiprocessing_method='spawn', src_dist=None, dst_dict=None):
+                 multiprocessing_method='spawn', src_dict=None, dst_dict=None):
         if device_ids is None:
             device_ids = tuple(range(torch.cuda.device_count()))
         super().__init__(device_ids, multiprocessing_method)
@@ -46,7 +46,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         Future.gen_list([
             self.call_async(rank, '_async_init', args=args, model=model, 
-                            src_dist=src_dist, dst_dict=dst_dict,
+                            src_dict=src_dict, dst_dict=dst_dict,
                             nccl_uid=nccl_uid)
             for rank in range(self.num_replicas)
         ])
@@ -54,7 +54,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.enable_rl = args.enable_rl
         self.args = args
 
-    def _async_init(self, rank, device_id, args, model, nccl_uid, src_dist=None, dst_dict=None):
+    def _async_init(self, rank, device_id, args, model, nccl_uid, src_dict=None, dst_dict=None):
         """Initialize child processes."""
         self.args = args
 
@@ -79,7 +79,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # initialize LR scheduler
         self.lr_scheduler = self._build_lr_scheduler()
 
-        self.src_dist = src_dist
+        self.src_dict = src_dict
         self.dst_dict = dst_dict
         self.enable_rl = args.enable_rl
         self.generator = None
@@ -175,27 +175,29 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 Generate greedy and sampled outputs
                 """
                 def lstrip_pad(tensor):
-                    return tensor[tensor.eq(self.pad).sum():]
+                    pad = self.generator.pad
+                    return tensor[tensor.eq(pad).sum():]
                 
                 greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
                                       maxlen=(args.max_len_a*srclen + args.max_len_b), 
-                                      enable_sample=False)
-                sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
-                                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
                                       enable_sample=True)
+                #sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                #                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                #                      enable_sample=True)
                 
                 res = {}
                 for i, id in enumerate(self._sample['id']):
                     src = input['src_tokens'].data[i, :]
                     # remove padding from ref, which appears at the beginning
-                    ref = lstrip_pad(s['target'].data[i, :])
+                    ref = lstrip_pad(self._sample['target'].data[i, :])
                     hypos = greedy_hypos[i]
 
                     ref = ref.int().cpu()
-                    top_hypo = hypos[0]['tokens'].int().cpu()
-                    display_hypotheses(id, src, None, ref, hypos[:min(len(hypos), args.nbest)])
+                    utils.display_hypotheses(id, src, None, ref, 
+                                             hypos[:min(len(hypos), args.nbest)],
+                                             self.src_dict, self.dst_dict)
 
-            
+            generate()
             
             
         # zero grads even if net_input is None, since we will all-reduce them
