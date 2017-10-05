@@ -60,6 +60,8 @@ class LinearizedConvolution(ConvTBC):
                 # shift buffer
                 self.input_buffer[:, :-1, :] = self.input_buffer[:, 1:, :].clone()
             # append next input
+            ###print("linearized_convolution input.size():"+str(input.size()))
+            ###print("linearized_convolution self.input_buffer.size():"+str(self.input_buffer.size()))
             self.input_buffer[:, -1, :] = input[:, -1, :]
             input = torch.autograd.Variable(self.input_buffer, volatile=True)
         output = F.linear(input.view(bsz, -1), weight, self.bias)

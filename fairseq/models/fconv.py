@@ -416,12 +416,12 @@ class Decoder(nn.Module):
         x_topic = x_topic.transpose(0, 1)
 
         # temporal convolutions_topic
-        for proj, conv, attention_topic in zip(self.projections_topic, self.convolutions_topic, self.attention_topic):
-            residual_topic = x_topic if proj is None else proj(x_topic)
+        for proj_topic, conv_topic, attention_topic in zip(self.projections_topic, self.convolutions_topic, self.attention_topic):
+            residual_topic = x_topic if proj_topic is None else proj_topic(x_topic)
 
             x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
-            x_topic = conv(x_topic)
-            x_topic = conv.remove_future_timesteps(x_topic)
+            x_topic = conv_topic(x_topic)
+            x_topic = conv_topic.remove_future_timesteps(x_topic)
             x_topic = F.glu(x_topic)
 
             # attention_topic
@@ -492,6 +492,7 @@ class Decoder(nn.Module):
         # save original forward and convolution layers
         self._orig_forward = self.forward
         self._orig_conv = self.convolutions
+        self._orig_conv_topic = self.convolutions_topic ###
 
         # switch to incremental forward
         self.forward = self._incremental_forward
@@ -503,6 +504,7 @@ class Decoder(nn.Module):
         # restore original forward and convolution layers
         self.forward = self._orig_forward
         self.convolutions = self._orig_conv
+        self.convolutions_topic = self._orig_conv_topic ###
 
         self._is_inference_incremental = False
 
@@ -530,7 +532,7 @@ class Decoder(nn.Module):
         # keep only the last token for incremental forward pass
         tokens = tokens[:, -1:]
         positions = positions[:, -1:]
-
+        
         # embed tokens and positions
         x = self.embed_tokens(tokens) + self.embed_positions(positions)
         target_embedding = x
@@ -566,7 +568,7 @@ class Decoder(nn.Module):
         ###topic channel
         # embed tokens and positions
         x_topic = self.embed_tokens(tokens) + self.embed_positions(positions)
-        target_embedding = x_topic
+        target_embedding_topic = x_topic
 
         # project to size of convolution
         x_topic = self.fc1_topic(x_topic)
@@ -582,7 +584,7 @@ class Decoder(nn.Module):
 
             # attention
             if attention_topic is not None:
-                x_topic, attn_scores_topic = attention_topic(x_topic, target_embedding, (encoder_a, encoder_a_topic, encoder_b_topic))
+                x_topic, attn_scores_topic = attention_topic(x_topic, target_embedding_topic, (encoder_a, encoder_a_topic, encoder_b_topic))
                 attn_scores_topic = attn_scores_topic / num_attn_layers_topic
                 if avg_attn_scores_topic is None:
                     avg_attn_scores_topic = attn_scores_topic
@@ -596,7 +598,9 @@ class Decoder(nn.Module):
         x_topic = self.fc2_topic(x_topic)
         x_topic = self.fc3_topic(x_topic)
 
-        return x, avg_attn_scores
+        ###return x, avg_attn_scores
+        return x+x_topic, avg_attn_scores+avg_attn_scores_topic
+        ###return x_topic, avg_attn_scores_topic
 
     def clear_incremental_state(self):
         """Clear all state used for incremental generation.
@@ -609,6 +613,8 @@ class Decoder(nn.Module):
             self.prev_state = None
             for conv in self.convolutions:
                 conv.clear_buffer()
+            for conv_topic in self.convolutions_topic:
+                conv_topic.clear_buffer()
 
     def reorder_incremental_state(self, new_order):
         """Reorder buffered internal state (for incremental generation).
@@ -622,6 +628,8 @@ class Decoder(nn.Module):
         if self._is_inference_incremental:
             for conv in self.convolutions:
                 conv.reorder_buffer(new_order)
+            for conv_topic in self.convolutions_topic:
+                conv_topic.reorder_buffer(new_order)
 
     def _use_beamable_mm(self, beam_size):
         """Replace torch.bmm with BeamableMM in attention layers."""
