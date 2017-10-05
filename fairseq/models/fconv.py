@@ -512,14 +512,20 @@ class Decoder(nn.Module):
         # setup initial state
         if self.prev_state is None:
             # transpose encoder output once to speed up attention layers
-            encoder_a, encoder_b = encoder_out
+            ###encoder_a, encoder_b = encoder_out
+            ###encoder_a = encoder_a.transpose(1, 2).contiguous()
+            ###self.prev_state = {
+            ###    'encoder_out': (encoder_a, encoder_b),
+            ###}
+            encoder_a, encoder_b, encoder_a_topic, encoder_b_topic = encoder_out
             encoder_a = encoder_a.transpose(1, 2).contiguous()
+            encoder_a_topic = encoder_a_topic.transpose(1, 2).contiguous()
             self.prev_state = {
-                'encoder_out': (encoder_a, encoder_b),
+                'encoder_out': (encoder_a, encoder_b, encoder_a_topic, encoder_b_topic),
             }
 
         # load previous state
-        encoder_a, encoder_b = self.prev_state['encoder_out']
+        encoder_a, encoder_b, encoder_a_topic, encoder_b_topic = self.prev_state['encoder_out']
 
         # keep only the last token for incremental forward pass
         tokens = tokens[:, -1:]
@@ -537,6 +543,7 @@ class Decoder(nn.Module):
         num_attn_layers = len(self.attention)
         for proj, conv, attention in zip(self.projections, self.convolutions, self.attention):
             residual = x if proj is None else proj(x)
+            print("x:"+str(x.size()))
             x = conv.incremental_forward(x)
             x = F.glu(x)
 
@@ -555,6 +562,39 @@ class Decoder(nn.Module):
         # project back to size of vocabulary
         x = self.fc2(x)
         x = self.fc3(x)
+        
+        ###topic channel
+        # embed tokens and positions
+        x_topic = self.embed_tokens(tokens) + self.embed_positions(positions)
+        target_embedding = x_topic
+
+        # project to size of convolution
+        x_topic = self.fc1_topic(x_topic)
+
+        # temporal convolutions
+        avg_attn_scores_topic = None
+        num_attn_layers_topic = len(self.attention_topic)
+        for proj_topic, conv_topic, attention_topic in zip(self.projections_topic, self.convolutions_topic, self.attention_topic):
+            residual_topic = x_topic if proj_topic is None else proj_topic(x_topic)
+            print("x_topic:"+str(x_topic.size()))
+            x_topic = conv_topic.incremental_forward(x_topic)
+            x_topic = F.glu(x_topic)
+
+            # attention
+            if attention_topic is not None:
+                x_topic, attn_scores_topic = attention_topic(x_topic, target_embedding, (encoder_a, encoder_a_topic, encoder_b_topic))
+                attn_scores_topic = attn_scores_topic / num_attn_layers_topic
+                if avg_attn_scores_topic is None:
+                    avg_attn_scores_topic = attn_scores_topic
+                else:
+                    avg_attn_scores_topic += attn_scores_topic
+
+            # residual
+            x_topic = (x_topic + residual_topic) * math.sqrt(0.5)
+
+        # project back to size of vocabulary
+        x_topic = self.fc2_topic(x_topic)
+        x_topic = self.fc3_topic(x_topic)
 
         return x, avg_attn_scores
 
