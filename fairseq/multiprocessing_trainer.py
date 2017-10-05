@@ -21,7 +21,7 @@ from fairseq.nag import NAG
 
 import copy
 
-from pythonrouge.pythonrouge import Pythonrouge
+from rouge import rouge
 
 class MultiprocessingTrainer(MultiprocessingEventLoop):
     """Main class for multi-GPU training.
@@ -213,21 +213,16 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             sampled_sums = [item[2] for item in ref_hypo_res]
             sum_log_probs = [item[3] for item in ref_hypo_res]
 
-            def evaluate(reference, summary, metric='ROUGE-L'):
+            def evaluate(hypotheses, references, metric='rouge_l/f_score'):
                 """
-                summary: [[], []]
-                reference: [[[]], [[]]]
+                summary: []
+                reference: []
                 """
-                ROUGE_path = "./pythonrouge/RELEASE-1.5.5/ROUGE-1.5.5.pl"
-                data_path = "./pythonrouge/RELEASE-1.5.5/data"
-                # setting rouge options
-                rouge = Pythonrouge(n_gram=2, ROUGE_SU4=True, ROUGE_L=True, stemming=False, stopwords=False, word_level=True, length_limit=False, length=50, use_cf=False, cf=95, scoring_formula="average", resampling=True, samples=1000, favor=True, p=0.5)
-                setting_file = rouge.setting(files=False, summary=summary, reference=reference)
-                scores = rouge.eval_rouge(setting_file, f_measure_only=True, ROUGE_path=ROUGE_path, data_path=data_path)
+                scores = rouge(hypotheses, references)
                 return scores[metric]
 
-            rouge_greedy = [evaluate([[[refs[i]]]], [[greedy_sums[i]]]) for i in range(len(refs))]
-            rouge_sampled = [evaluate([[[refs[i]]]], [[sampled_sums[i]]]) for i in range(len(refs))]
+            rouge_greedy = [evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))]
+            rouge_sampled = [evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))]
             print('mean_rouge_greedy: {}, mean_rouge_sampled: {}'.format(sum(rouge_greedy)/len(rouge_greedy), sum(rouge_sampled)/len(rouge_sampled)))
             
             rl_loss = 0
