@@ -219,7 +219,7 @@ class SequenceGenerator(object):
                     model.decoder.reorder_incremental_state(reorder_state)
 
             probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)
-
+            cand_indices = buffer('cand_indices')
             if enable_sample:
                 # must sampled before cumulation operation
                 torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
@@ -239,7 +239,6 @@ class SequenceGenerator(object):
             # take the best 2 x beam_size predictions. We'll choose the first
             # beam_size of these which don't predict eos to continue with.
             cand_scores = buffer('cand_scores', type_of=scores)
-            cand_indices = buffer('cand_indices')
             cand_beams = buffer('cand_beams')
 
             if enable_sample:

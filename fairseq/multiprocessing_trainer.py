@@ -204,7 +204,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                     _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, src, None, ref, 
                                                                          sampled_hypo[:min(len(sampled_hypo), args.nbest)],
                                                                          self.src_dict, self.dst_dict)
-                    ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0]), _sum_log_probs[0]) # beam_size = 1
+                    ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
 
                 return ref_hypo_res
             ref_hypo_res = generate()
@@ -219,6 +219,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 reference: [[[]], [[]]]
                 """
                 ROUGE_path = "./pythonrouge/RELEASE-1.5.5/ROUGE-1.5.5.pl"
+                data_path = "./pythonrouge/RELEASE-1.5.5/data"
                 # setting rouge options
                 rouge = Pythonrouge(n_gram=2, ROUGE_SU4=True, ROUGE_L=True, stemming=False, stopwords=False, word_level=True, length_limit=False, length=50, use_cf=False, cf=95, scoring_formula="average", resampling=True, samples=1000, favor=True, p=0.5)
                 setting_file = rouge.setting(files=False, summary=summary, reference=reference)
@@ -227,14 +228,14 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
             rouge_greedy = [evaluate([[[refs[i]]]], [[greedy_sums[i]]]) for i in range(len(refs))]
             rouge_sampled = [evaluate([[[refs[i]]]], [[sampled_sums[i]]]) for i in range(len(refs))]
-            print('rouge_greedy')
-            print(rouge_greedy)
-            print('rouge_sampled')
-            print(rouge_sampled)
+            print('mean_rouge_greedy: {}, mean_rouge_sampled: {}'.format(sum(rouge_greedy)/len(rouge_greedy), sum(rouge_sampled)/len(rouge_sampled)))
+            
             rl_loss = 0
+            
             for r_g, r_s, sum_log_prob in zip(rouge_greedy, rouge_sampled, sum_log_probs):
-                rl_loss += (r_g - r_s) * sum_log_probs
-            rl_loss /= len(r_g) # normalized by # sentences
+                rl_loss += (r_g - r_s) * sum_log_prob
+            rl_loss /= len(rouge_greedy) # normalized by # sentences
+            
 
             
         # zero grads even if net_input is None, since we will all-reduce them
@@ -245,7 +246,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         if self._sample is not None:
             net_output = self.model(**self._sample['net_input'])
             ml_loss = criterion(net_output, self._sample)
-            if enable_rl:
+            if self.enable_rl:
                 loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
             else:
                 loss_ = ml_loss
