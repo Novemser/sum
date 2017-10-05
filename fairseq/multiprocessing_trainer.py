@@ -21,7 +21,7 @@ from fairseq.nag import NAG
 
 import copy
 
-from rouge import rouge
+from fairseq.rouge import rouge
 
 class MultiprocessingTrainer(MultiprocessingEventLoop):
     """Main class for multi-GPU training.
@@ -230,9 +230,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             for r_g, r_s, sum_log_prob in zip(rouge_greedy, rouge_sampled, sum_log_probs):
                 rl_loss += (r_g - r_s) * sum_log_prob
             rl_loss /= len(rouge_greedy) # normalized by # sentences
-            
-
-            
+            rl_loss = torch.Tensor([rl_loss]).cuda()
+            print(rl_loss)
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
 
@@ -242,7 +241,9 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             net_output = self.model(**self._sample['net_input'])
             ml_loss = criterion(net_output, self._sample)
             if self.enable_rl:
+                print(ml_loss)
                 loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
+                print(loss_)
             else:
                 loss_ = ml_loss
             loss_.backward()
