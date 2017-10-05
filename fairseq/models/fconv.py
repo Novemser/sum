@@ -28,6 +28,7 @@ class FConvModel(nn.Module):
         encoder_out = self.encoder(src_tokens, src_positions)
         decoder_out = self.decoder(input_tokens, input_positions, encoder_out)
         ###return decoder_out.view(-1, decoder_out.size(-1))
+        ###return decoder_out[0].view(-1, decoder_out[0].size(-1)),decoder_out[1].view(-1, decoder_out[1].size(-1))
         return decoder_out[0].view(-1, decoder_out[0].size(-1)),decoder_out[1].view(-1, decoder_out[1].size(-1))
 
     def make_generation_fast_(self, beam_size, use_beamable_mm=False):
@@ -443,6 +444,7 @@ class Decoder(nn.Module):
         ###print("Decoder x output size:"+str(x))  ###Decoder x output size:torch.Size([108, 12, 8789])
         ###print("Decoder x_topic output size:"+str(x_topic))
         return x,x_topic
+        ###return (x+x_topic)
 
     def context_size(self):
         """Maximum number of input elements each output element depends on"""

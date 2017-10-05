@@ -21,8 +21,9 @@ class CrossEntropyCriterion(FairseqCriterion):
     def prepare(self, samples):
         self.denom = sum(s['ntokens'] if s else 0 for s in samples)
 
-    def forward(self, net_output, sample):
+    def forward(self, net_output_for_criterion, sample):
         ###print("net_output.size():"+str(net_output.size()))
+        net_output = net_output_for_criterion[0] + net_output_for_criterion[1]
         input = net_output.view(-1, net_output.size(-1)) ###no softmax yet
         target = sample['target'].view(-1)
         ###print("CrossEntropyCriterion input:"+str(input)+" sum(input[0])"+str(sum(input[0])))
