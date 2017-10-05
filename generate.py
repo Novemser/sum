@@ -98,7 +98,6 @@ def main():
             print('A{}\t{}'.format(id_str, align_str))
 
     if args.interactive:
-        print("args.interactive:"+args.interactive)
         for line in sys.stdin:
             tokens = tokenizer.Tokenizer.tokenize(line, dataset.src_dict, add_if_not_exist=False).long()
             start = dataset.src_dict.pad() + 1
@@ -111,6 +110,7 @@ def main():
             display_hypotheses(None, tokens, line, None, hypos[:min(len(hypos), args.nbest)])
 
     else:
+        print("args.interactive 0:"+str(args.interactive))
         def maybe_remove_bpe(tokens):
             """Helper for removing BPE symbols from a hypothesis."""
             if not args.remove_bpe:
