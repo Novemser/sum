@@ -219,19 +219,18 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 reference: []
                 """
                 scores = rouge(hypotheses, references)
-                return scores[metric]
+                return scores[metric].item()
 
             rouge_greedy = [evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))]
             rouge_sampled = [evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))]
-            print('mean_rouge_greedy: {}, mean_rouge_sampled: {}'.format(sum(rouge_greedy)/len(rouge_greedy), sum(rouge_sampled)/len(rouge_sampled)))
+            
             
             rl_loss = 0
             
             for r_g, r_s, sum_log_prob in zip(rouge_greedy, rouge_sampled, sum_log_probs):
                 rl_loss += (r_g - r_s) * sum_log_prob
             rl_loss /= len(rouge_greedy) # normalized by # sentences
-            rl_loss = torch.Tensor([rl_loss]).cuda()
-            print(rl_loss)
+
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
 
@@ -241,9 +240,13 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             net_output = self.model(**self._sample['net_input'])
             ml_loss = criterion(net_output, self._sample)
             if self.enable_rl:
-                print(ml_loss)
                 loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
-                print(loss_)
+                print('\n mixed_loss: {:^10.4f}, ml_loss: {:^10.4f}, rl_loss: {:^10.4f}, mean_rouge_greedy: {:^10.4f}, mean_rouge_sampled: {:^10.4f}'.format(
+                        loss_.data[0],
+                        ml_loss.data[0],
+                        rl_loss,
+                        sum(rouge_greedy)/len(rouge_greedy), 
+                        sum(rouge_sampled)/len(rouge_sampled)))
             else:
                 loss_ = ml_loss
             loss_.backward()
