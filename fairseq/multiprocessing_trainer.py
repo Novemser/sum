@@ -21,6 +21,8 @@ from fairseq.nag import NAG
 
 import copy
 
+from pythonrouge.pythonrouge import Pythonrouge
+
 class MultiprocessingTrainer(MultiprocessingEventLoop):
     """Main class for multi-GPU training.
 
@@ -146,7 +148,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         # forward pass, backward pass and gradient step
         losses = [
-            self.call_async(rank, '_async_train_step', criterion=criterion, rl_loss=None)
+            self.call_async(rank, '_async_train_step', criterion=criterion)
             for rank in range(self.num_replicas)
         ]
 
@@ -156,7 +158,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         return loss, grad_norms[0]
 
-    def _async_train_step(self, rank, device_id, criterion, rl_loss=None):
+    def _async_train_step(self, rank, device_id, criterion):
         self.model.train()
 
         # If enable_rl, generate two outputs in inference model
@@ -186,7 +188,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
                                      enable_sample=True)
                 
-                ref_hypo_triples = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
+                ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
                 for i, id in enumerate(self._sample['id']):
                     src = input['src_tokens'].data[i, :]
                     # remove padding from ref, which appears at the beginning
@@ -195,22 +197,45 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                     sampled_hypo = sampled_hypos[i]
 
                     ref = ref.int().cpu()
-                    ref_str, greedy_hypo_str = utils.display_hypotheses(id, src, None, ref, 
+                    # we don't need sum_log_probs for greedy output
+                    ref_str, greedy_hypo_str, _ = utils.display_hypotheses(id, src, None, ref, 
                                                                          greedy_hypo[:min(len(greedy_hypo), args.nbest)],
                                                                          self.src_dict, self.dst_dict)
-                    _, sampled_hypo_str = utils.display_hypotheses(id, src, None, ref, 
+                    _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, src, None, ref, 
                                                                          sampled_hypo[:min(len(sampled_hypo), args.nbest)],
                                                                          self.src_dict, self.dst_dict)
-                    ref_hypo_triples.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0])) # beam_size = 1
+                    ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0]), _sum_log_probs[0]) # beam_size = 1
 
-                return ref_hypo_triples
-            ref_hypo_triples = generate()
-            refs = [[[triple[0]]] for triple in ref_hypo_triples]
-            greedy_sums = [[triple[1]] for triple in ref_hypo_triples]
-            sampled_sums = [[triple[2]] for triple in ref_hypo_triples]
-            
-            # TODO: ROUGE, loss
-            
+                return ref_hypo_res
+            ref_hypo_res = generate()
+            refs = [item[0] for item in ref_hypo_res]
+            greedy_sums = [item[1] for item in ref_hypo_res]
+            sampled_sums = [item[2] for item in ref_hypo_res]
+            sum_log_probs = [item[3] for item in ref_hypo_res]
+
+            def evaluate(reference, summary, metric='ROUGE-L'):
+                """
+                summary: [[], []]
+                reference: [[[]], [[]]]
+                """
+                ROUGE_path = "./pythonrouge/RELEASE-1.5.5/ROUGE-1.5.5.pl"
+                # setting rouge options
+                rouge = Pythonrouge(n_gram=2, ROUGE_SU4=True, ROUGE_L=True, stemming=False, stopwords=False, word_level=True, length_limit=False, length=50, use_cf=False, cf=95, scoring_formula="average", resampling=True, samples=1000, favor=True, p=0.5)
+                setting_file = rouge.setting(files=False, summary=summary, reference=reference)
+                scores = rouge.eval_rouge(setting_file, f_measure_only=True, ROUGE_path=ROUGE_path, data_path=data_path)
+                return scores[metric]
+
+            rouge_greedy = [evaluate([[[refs[i]]]], [[greedy_sums[i]]]) for i in range(len(refs))]
+            rouge_sampled = [evaluate([[[refs[i]]]], [[sampled_sums[i]]]) for i in range(len(refs))]
+            print('rouge_greedy')
+            print(rouge_greedy)
+            print('rouge_sampled')
+            print(rouge_sampled)
+            rl_loss = 0
+            for r_g, r_s, sum_log_prob in zip(rouge_greedy, rouge_sampled, sum_log_probs):
+                rl_loss += (r_g - r_s) * sum_log_probs
+            rl_loss /= len(r_g) # normalized by # sentences
+
             
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
@@ -219,10 +244,11 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         loss = 0
         if self._sample is not None:
             net_output = self.model(**self._sample['net_input'])
-            # what is net_output
-            # what is output of model.decode()
-            # how to transform them to string?
-            loss_ = criterion(net_output, self._sample)
+            ml_loss = criterion(net_output, self._sample)
+            if enable_rl:
+                loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
+            else:
+                loss_ = ml_loss
             loss_.backward()
             loss = loss_.data[0]
 

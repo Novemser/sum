@@ -60,7 +60,9 @@ def add_optimization_args(parser):
                             ' where each sample is drawn randomly with replacement from the'
                             ' dataset')
     group.add_argument('-enable_rl', action='store_true',
-                       help='enable reinforcement learning, default is False')
+                       help='enable reinforcement learning')
+    group.add_argument('--loss_scale', default=0.99, type=float,
+                       help='scaling factor for the difference in magnitude between rl_loss and ml_loss')
     return group
 
 

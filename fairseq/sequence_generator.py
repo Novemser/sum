@@ -170,9 +170,10 @@ class SequenceGenerator(object):
                     for each hypothesis
             """
             assert bbsz_idx.numel() == scores.numel()
+            sum_log_probs = scores
             norm_scores = scores/math.pow(step+1, self.len_penalty) if self.normalize_scores else scores
             sents_seen = set()
-            for idx, score in zip(bbsz_idx.cpu(), norm_scores.cpu()):
+            for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs.cpu()):
                 sent = idx // beam_size
                 sents_seen.add(sent)
 
@@ -184,6 +185,7 @@ class SequenceGenerator(object):
                         'tokens': hypo,
                         'score': score,
                         'alignment': alignment,
+                        'sum_log_prob': sum_log_prob
                     }
 
                 if len(finalized[sent]) < beam_size:
@@ -217,6 +219,11 @@ class SequenceGenerator(object):
                     model.decoder.reorder_incremental_state(reorder_state)
 
             probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)
+
+            if enable_sample:
+                # must sampled before cumulation operation
+                torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
+
             if step == 0:
                 # at the first step all hypotheses are equally likely, so use
                 # only the first beam
@@ -234,9 +241,10 @@ class SequenceGenerator(object):
             cand_scores = buffer('cand_scores', type_of=scores)
             cand_indices = buffer('cand_indices')
             cand_beams = buffer('cand_beams')
+
             if enable_sample:
-                torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
-                # torch.index_select(probs.view(bsz, -1), 1, cand_indices.view(-1), out=cand_scores)
+                # sampled based on cumulative probs; maybe experiment with it
+                # torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
                 torch.gather(probs.view(bsz, -1), 1, cand_indices, out=cand_scores)
             else:
                 probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
