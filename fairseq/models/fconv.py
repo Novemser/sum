@@ -306,9 +306,11 @@ class Decoder(nn.Module):
     """Convolutional decoder"""
     def __init__(self, num_embeddings, embed_dim=512, out_embed_dim=256,
                  max_positions=1024, convolutions=((512, 3),) * 20, convolutions_topic=((512, 3),) * 20,
-                 attention=True, attention_topic=True,dropout=0.1, padding_idx=1):
+                 attention=True, attention_topic=True,dropout=0.1, padding_idx=1, topic_words_mask=None):
         super(Decoder, self).__init__()
         self.dropout = dropout
+        
+        self.topic_words_mask = topic_words_mask###
 
         in_channels = convolutions[0][0]
         if isinstance(attention, bool):
@@ -440,10 +442,26 @@ class Decoder(nn.Module):
         x_topic = self.fc2_topic(x_topic)
         x_topic = F.dropout(x_topic, p=self.dropout, training=self.training)
         x_topic = self.fc3_topic(x_topic)
- 
         ###print("Decoder x output size:"+str(x))  ###Decoder x output size:torch.Size([108, 12, 8789])
         ###print("Decoder x_topic output size:"+str(x_topic))
-        return x,x_topic
+        
+        ###self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0))
+        ###print("x_topic.size():"+ str( x_topic.size() ))
+        ###print("self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)).size():"+str(self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)).size()))
+        ###print("torch.is_tensor(x_topic):"+ str( torch.is_tensor(x_topic) ))
+        ###print("self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)):"+str(torch.is_tensor(self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)))) )
+        """
+        x_topic.size():torch.Size([108, 12, 8789])
+        self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)).size():torch.Size([108, 12, 8789])
+        torch.is_tensor(x_topic):False
+        self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)):True
+        """
+        ###x_topic_mask = x_topic * self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)) 
+        
+        x_topic_mask = x_topic * torch.autograd.Variable(self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)), requires_grad=False)     
+        print("x_topic_mask.size():"+str(x_topic_mask.size()))
+        
+        return x,x_topic_mask
         ###return (x+x_topic)
 
     def context_size(self):
@@ -597,10 +615,12 @@ class Decoder(nn.Module):
         # project back to size of vocabulary
         x_topic = self.fc2_topic(x_topic)
         x_topic = self.fc3_topic(x_topic)
+        
+        x_topic_mask = x_topic * torch.autograd.Variable(self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)), requires_grad=False)       
+        print("x_topic_mask.size():"+str(x_topic_mask.size()))
 
         ###return x, avg_attn_scores
-        return x+x_topic, avg_attn_scores+avg_attn_scores_topic
-        ###return x_topic, avg_attn_scores_topic
+        return x+x_topic_mask, avg_attn_scores+avg_attn_scores_topic
 
     def clear_incremental_state(self):
         """Clear all state used for incremental generation.
@@ -801,6 +821,12 @@ def build_model(args, dataset):
        topic_words = topic_words + [item[0] for item in prob_list[0:topic_word_num]]
     topic_words = sorted(list(set(topic_words)))
     
+    dst_dict_word_idx = dataset.dst_dict.indices
+    topic_words_mask = [float(0.0)]*len(dst_dict_word_idx)
+    for word in dst_dict_word_idx:
+        if word in topic_words:
+            topic_words_mask[dst_dict_word_idx[word]]=1
+    
     ### Load topic into memory
     with open(filename_topic_model) as file:
         vocab_topic = list(line.strip("\n") for line in file)
@@ -855,5 +881,7 @@ def build_model(args, dataset):
         dropout=args.dropout,
         padding_idx=padding_idx,
         max_positions=args.max_positions,
+        topic_words_mask = torch.from_numpy(np.array(topic_words_mask)).float().cuda(),
+        ###topic_words_mask = topic_words_mask,
     )
     return FConvModel(encoder, decoder, padding_idx)
