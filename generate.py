@@ -98,6 +98,7 @@ def main():
             print('A{}\t{}'.format(id_str, align_str))
 
     if args.interactive:
+        print("args.interactive:"+args.interactive)
         for line in sys.stdin:
             tokens = tokenizer.Tokenizer.tokenize(line, dataset.src_dict, add_if_not_exist=False).long()
             start = dataset.src_dict.pad() + 1
