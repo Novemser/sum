@@ -159,7 +159,6 @@ def display_hypotheses(id, src, orig, ref, hypos, src_dict, dst_dict):
     """
     bpe_symbol = '@@'
     id_str = '' if id is None else '-{}'.format(id)
-    src_str = to_sentence(src_dict, src, bpe_symbol)
     hypo_str = []
     sum_log_probs = []
     # print('S{}\t{}'.format(id_str, src_str))

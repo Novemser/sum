@@ -19,6 +19,8 @@ def get_parser(desc):
                         help='log progress every N updates (when progress bar is disabled)')
     parser.add_argument('--seed', default=1, type=int, metavar='N',
                         help='pseudo random number generator seed')
+    parser.add_argument('--cuda-visible-devices', type=str, default='1',
+                        help='select gpu devices to use')
     return parser
 
 

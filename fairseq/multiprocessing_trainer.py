@@ -241,12 +241,14 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             ml_loss = criterion(net_output, self._sample)
             if self.enable_rl:
                 loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
-                print('\n mixed_loss: {:^10.4f}, ml_loss: {:^10.4f}, rl_loss: {:^10.4f}, mean_rouge_greedy: {:^10.4f}, mean_rouge_sampled: {:^10.4f}'.format(
+                print('\n mixed_loss: {:^10.4f}| ml_loss: {:^10.4f}| rl_loss: {:^10.4f}| mean_rouge_greedy: {:^10.4f}| mean_rouge_sampled: {:^10.4f}| mean_sum_log_prob: {:^10.4f}'.format(
                         loss_.data[0],
                         ml_loss.data[0],
                         rl_loss,
                         sum(rouge_greedy)/len(rouge_greedy), 
-                        sum(rouge_sampled)/len(rouge_sampled)))
+                        sum(rouge_sampled)/len(rouge_sampled),
+                        sum(sum_log_probs)/len(sum_log_probs)))
+                # print(greedy_sums[0] if greedy_sums else "NONE")
             else:
                 loss_ = ml_loss
             loss_.backward()
