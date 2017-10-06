@@ -29,7 +29,7 @@ class FConvModel(nn.Module):
         decoder_out = self.decoder(input_tokens, input_positions, encoder_out)
         ###return decoder_out.view(-1, decoder_out.size(-1))
         ###return decoder_out[0].view(-1, decoder_out[0].size(-1)),decoder_out[1].view(-1, decoder_out[1].size(-1))
-        return decoder_out[0].view(-1, decoder_out[0].size(-1)),decoder_out[1].view(-1, decoder_out[1].size(-1))
+        return decoder_out[0].view(-1, decoder_out[0].size(-1)), decoder_out[1].view(-1, decoder_out[1].size(-1)),decoder_out[2]
 
     def make_generation_fast_(self, beam_size, use_beamable_mm=False):
         """Optimize model for faster generation.
@@ -616,11 +616,12 @@ class Decoder(nn.Module):
         x_topic = self.fc2_topic(x_topic)
         x_topic = self.fc3_topic(x_topic)
         
-        x_topic_mask = x_topic * torch.autograd.Variable(self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)), requires_grad=False)       
-        print("x_topic_mask.size():"+str(x_topic_mask.size()))
+        ###x_topic_mask = x_topic * torch.autograd.Variable(self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)), requires_grad=False)       
+        ###print("x_topic_mask.size():"+str(x_topic_mask.size()))
 
         ###return x, avg_attn_scores
-        return x+x_topic_mask, avg_attn_scores+avg_attn_scores_topic
+        ###return x+x_topic_mask, avg_attn_scores+avg_attn_scores_topic
+        return x, x_topic, avg_attn_scores, avg_attn_scores_topic
 
     def clear_incremental_state(self):
         """Clear all state used for incremental generation.
