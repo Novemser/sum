@@ -54,6 +54,7 @@ def main():
                                    stop_early=(not args.no_early_stop),
                                    normalize_scores=(not args.unnormalized),
                                    len_penalty=args.lenpen)
+                                   ###enable_topic=args.enable_topic)
     align_dict = {}
     if args.unk_replace_dict != '':
         assert args.interactive, "Unkown words replacing requires access to original source and is only" \
