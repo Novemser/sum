@@ -329,7 +329,7 @@ class SequenceGenerator(object):
                 x, x_topic, attn_scores, attn_scores_topic, topic_words_mask= model.decoder(tokens, positions, encoder_out)
                 logits_exp = torch.exp(x) + torch.exp(x_topic) * torch.autograd.Variable(topic_words_mask.expand(x_topic.size(0), x_topic.size(1), topic_words_mask.size(0)), requires_grad=False)
                 print("logits_exp.size():"+str(logits_exp.size()))
-                probs =( logits_exp / torch.sum(logits_exp,-1).view(logits_exp.size(0), logits_exp.size(1), 1).expand(logits_exp.size(0), logits_exp.size(1), logits_exp.size(2)) ).data
+                probs =( logits_exp.view(-1,logits_exp.size(-1)) / torch.sum(logits_exp,-1).view(logits_exp.size(0), 1).expand(logits_exp.size(0), logits_exp.size(1)) ).data
                 print("probs:"+str(probs))
                 attn = (attn_scores[:, -1, :]+attn_scores_topic[:, -1, :]).data
             else:
