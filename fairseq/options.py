@@ -59,6 +59,8 @@ def add_optimization_args(parser):
                        help='If bigger than 0, use that number of mini-batches for each epoch,'
                             ' where each sample is drawn randomly with replacement from the'
                             ' dataset')
+    group.add_argument('--enable_topic', action='store_false',
+                       help='enable reinforcement learning')
     return group
 
 

@@ -72,6 +72,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         # initialize LR scheduler
         self.lr_scheduler = self._build_lr_scheduler()
+        
+        self.enable_topic = args.enable_topic
 
     def _build_lr_scheduler(self):
         if self.args.force_anneal > 0:
