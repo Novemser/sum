@@ -105,7 +105,9 @@ def main():
             if use_cuda:
                 positions = positions.cuda()
                 tokens = tokens.cuda()
-            translations = translator.generate(Variable(tokens.view(1, -1)), Variable(positions.view(1, -1)))
+            translations = translator.generate(Variable(tokens.view(1, -1)), 
+                                               Variable(positions.view(1, -1)),
+                                               enable_sample=args.enable_sample)
             hypos = translations[0]
             display_hypotheses(None, tokens, line, None, hypos[:min(len(hypos), args.nbest)])
 
@@ -127,7 +129,8 @@ def main():
             gen_timer = StopwatchMeter()
             translations = translator.generate_batched_itr(
                 t, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
-                cuda_device=0 if use_cuda else None, timer=gen_timer)
+                cuda_device=0 if use_cuda else None, timer=gen_timer,
+                enable_sample=args.enable_sample)
             for id, src, ref, hypos in translations:
                 ref = ref.int().cpu()
                 top_hypo = hypos[0]['tokens'].int().cpu()

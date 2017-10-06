@@ -2,6 +2,7 @@
 
 CUDA_VISIBLE_DEVICES=1 python3 generate.py data_giga_bin --path checkpoints/fconv/checkpoint_best.pt --beam 5 --batch-size 128 --lenpen 0.5 --remove-bpe | tee > ./output/result
 
+
 : <<END
 ...
 | Translated 3003 sentences (95451 tokens) in 81.3s (1174.33 tokens/s)

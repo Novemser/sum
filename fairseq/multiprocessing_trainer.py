@@ -14,10 +14,14 @@ import torch
 from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
 
 from fairseq import nccl, utils
+from fairseq.sequence_generator import SequenceGenerator
 from fairseq.criterions import FairseqCriterion
 from fairseq.multiprocessing_event_loop import MultiprocessingEventLoop, Future
 from fairseq.nag import NAG
 
+import copy
+
+from fairseq.rouge import rouge
 
 class MultiprocessingTrainer(MultiprocessingEventLoop):
     """Main class for multi-GPU training.
@@ -32,7 +36,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     """
 
     def __init__(self, args, model, device_ids=None,
-                 multiprocessing_method='spawn'):
+                 multiprocessing_method='spawn', src_dict=None, dst_dict=None):
         if device_ids is None:
             device_ids = tuple(range(torch.cuda.device_count()))
         super().__init__(device_ids, multiprocessing_method)
@@ -43,12 +47,16 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         nccl_uid = nccl.get_unique_id()
 
         Future.gen_list([
-            self.call_async(rank, '_async_init', args=args, model=model,
+            self.call_async(rank, '_async_init', args=args, model=model, 
+                            src_dict=src_dict, dst_dict=dst_dict,
                             nccl_uid=nccl_uid)
             for rank in range(self.num_replicas)
         ])
+            
+        self.enable_rl = args.enable_rl
+        self.args = args
 
-    def _async_init(self, rank, device_id, args, model, nccl_uid):
+    def _async_init(self, rank, device_id, args, model, nccl_uid, src_dict=None, dst_dict=None):
         """Initialize child processes."""
         self.args = args
 
@@ -72,6 +80,19 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         # initialize LR scheduler
         self.lr_scheduler = self._build_lr_scheduler()
+
+        self.src_dict = src_dict
+        self.dst_dict = dst_dict
+        self.enable_rl = args.enable_rl
+        self.generator = None
+        self.args = args
+        if self.enable_rl:
+            # Initialize generator
+            models = [model] # SequenceGenerator accepts a list of models
+            self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
+                                           stop_early=(not args.no_early_stop),
+                                           normalize_scores=(not args.unnormalized),
+                                           len_penalty=args.lenpen).cuda()
 
     def _build_lr_scheduler(self):
         if self.args.force_anneal > 0:
@@ -120,7 +141,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     def train_step(self, samples, criterion):
         """Do forward, backward and gradient step in parallel."""
         assert isinstance(criterion, FairseqCriterion)
-
+        
         # scatter sample across GPUs
         self._scatter_samples(samples)
         criterion.prepare(samples)
@@ -140,6 +161,76 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     def _async_train_step(self, rank, device_id, criterion):
         self.model.train()
 
+        # If enable_rl, generate two outputs in inference model
+        # 1) greedy
+        # 2) sampled
+        if self.enable_rl:
+            args = self.args
+            # since deepcopy does not support our case, we do not use fast generation
+            # cur_model = copy.deepcopy(self.model) # deep copy current model, since once made generation fast, cannot be trained
+            # cur_model.make_generation_fast_(1, not args.no_beamable_mm) # for fast generation
+            self.generator.models = [self.model]       
+            input = self._sample['net_input']
+            srclen = input['src_tokens'].size(1)
+            
+            def generate():
+                """
+                Generate greedy and sampled outputs
+                """
+                def lstrip_pad(tensor):
+                    pad = self.generator.pad
+                    return tensor[tensor.eq(pad).sum():]
+                
+                greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                                      enable_sample=False)
+                sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                                     maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                                     enable_sample=True)
+                
+                ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
+                for i, id in enumerate(self._sample['id']):
+                    src = input['src_tokens'].data[i, :]
+                    # remove padding from ref, which appears at the beginning
+                    ref = lstrip_pad(self._sample['target'].data[i, :])
+                    greedy_hypo = greedy_hypos[i]
+                    sampled_hypo = sampled_hypos[i]
+
+                    ref = ref.int().cpu()
+                    # we don't need sum_log_probs for greedy output
+                    ref_str, greedy_hypo_str, _ = utils.display_hypotheses(id, src, None, ref, 
+                                                                         greedy_hypo[:min(len(greedy_hypo), args.nbest)],
+                                                                         self.src_dict, self.dst_dict)
+                    _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, src, None, ref, 
+                                                                         sampled_hypo[:min(len(sampled_hypo), args.nbest)],
+                                                                         self.src_dict, self.dst_dict)
+                    ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
+
+                return ref_hypo_res
+            ref_hypo_res = generate()
+            refs = [item[0] for item in ref_hypo_res]
+            greedy_sums = [item[1] for item in ref_hypo_res]
+            sampled_sums = [item[2] for item in ref_hypo_res]
+            sum_log_probs = [item[3] for item in ref_hypo_res]
+
+            def evaluate(hypotheses, references, metric='rouge_l/f_score'):
+                """
+                summary: []
+                reference: []
+                """
+                scores = rouge(hypotheses, references)
+                return scores[metric].item()
+
+            rouge_greedy = [evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))]
+            rouge_sampled = [evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))]
+            
+            
+            rl_loss = 0
+            
+            for r_g, r_s, sum_log_prob in zip(rouge_greedy, rouge_sampled, sum_log_probs):
+                rl_loss += (r_g - r_s) * sum_log_prob
+            rl_loss /= len(rouge_greedy) # normalized by # sentences
+
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
 
@@ -147,7 +238,17 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         loss = 0
         if self._sample is not None:
             net_output = self.model(**self._sample['net_input'])
-            loss_ = criterion(net_output, self._sample)
+            ml_loss = criterion(net_output, self._sample)
+            if self.enable_rl:
+                loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
+                print('\n mixed_loss: {:^10.4f}, ml_loss: {:^10.4f}, rl_loss: {:^10.4f}, mean_rouge_greedy: {:^10.4f}, mean_rouge_sampled: {:^10.4f}'.format(
+                        loss_.data[0],
+                        ml_loss.data[0],
+                        rl_loss,
+                        sum(rouge_greedy)/len(rouge_greedy), 
+                        sum(rouge_sampled)/len(rouge_sampled)))
+            else:
+                loss_ = ml_loss
             loss_.backward()
             loss = loss_.data[0]
 
@@ -248,4 +349,16 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         if sample is None:
             self._sample = None
         else:
+            '''
+            self._sample: {'id': LongTensor[181], 
+                            'ntokens': 1314, 
+                            'target': LongTensor[181*12], 
+                            'net_input': {
+                                'src_token': LongTensor[181*12],
+                                'src_position': LongTensor[181*12],
+                                'input_tokens': LongTensor[181*12],
+                                'input_position': LongTensor[181*12]
+                                }
+                            }
+            '''
             self._sample = utils.prepare_sample(sample, volatile=volatile, cuda_device=device_id)

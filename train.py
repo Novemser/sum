@@ -35,10 +35,12 @@ def main():
     options.add_optimization_args(parser)
     options.add_checkpoint_args(parser)
     options.add_model_args(parser)
+    options.add_generation_args(parser) # should specify generation parameters!!
 
     args = utils.parse_args_and_arch(parser)
     print(args)
 
+    os.environ['CUDA_VISIBLE_DEVICES'] = '1' # TODO: add to options
     if args.no_progress_bar:
         progress_bar.enabled = False
         progress_bar.print_interval = args.log_interval
@@ -70,7 +72,7 @@ def main():
     criterion = utils.build_criterion(args, dataset)
 
     # Start multiprocessing
-    trainer = MultiprocessingTrainer(args, model)
+    trainer = MultiprocessingTrainer(args, model, src_dict=dataset.src_dict, dst_dict=dataset.dst_dict)
 
     # Load the latest checkpoint if one is available
     epoch, batch_offset = trainer.load_checkpoint(os.path.join(args.save_dir, args.restore_file))

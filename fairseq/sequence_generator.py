@@ -17,7 +17,7 @@ from fairseq import utils
 
 class SequenceGenerator(object):
     def __init__(self, models, dst_dict, beam_size=1, minlen=1, maxlen=200,
-                 stop_early=True, normalize_scores=True, len_penalty=1):
+                 stop_early=True, normalize_scores=True, len_penalty=1, enable_sample=False):
         """Generates translations of a given source sentence.
 
         Args:
@@ -41,6 +41,7 @@ class SequenceGenerator(object):
         self.stop_early = stop_early
         self.normalize_scores = normalize_scores
         self.len_penalty = len_penalty
+        self.enable_sample = enable_sample
 
     def cuda(self):
         for model in self.models:
@@ -49,7 +50,7 @@ class SequenceGenerator(object):
         return self
 
     def generate_batched_itr(self, data_itr, maxlen_a=0, maxlen_b=200,
-                             cuda_device=None, timer=None):
+                             cuda_device=None, timer=None, enable_sample=None):
         """Iterate over a batched dataset and yield individual translations.
 
         Args:
@@ -69,7 +70,7 @@ class SequenceGenerator(object):
             if timer is not None:
                 timer.start()
             hypos = self.generate(input['src_tokens'], input['src_positions'],
-                                  maxlen=(maxlen_a*srclen + maxlen_b))
+                                  maxlen=(maxlen_a*srclen + maxlen_b), enable_sample=enable_sample)
             if timer is not None:
                 timer.stop(s['ntokens'])
             for i, id in enumerate(s['id']):
@@ -78,18 +79,22 @@ class SequenceGenerator(object):
                 ref = lstrip_pad(s['target'].data[i, :])
                 yield id, src, ref, hypos[i]
 
-    def generate(self, src_tokens, src_positions, beam_size=None, maxlen=None):
+    def generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, enable_sample=None):
         """Generate a batch of translations."""
         with ExitStack() as stack:
             for model in self.models:
                 stack.enter_context(model.decoder.incremental_inference())
-            return self._generate(src_tokens, src_positions, beam_size, maxlen)
+            return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample)
 
-    def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None):
+    def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, enable_sample=None):
+        enable_sample = enable_sample if enable_sample is not None else self.enable_sample
+        # if sample mode, beam_size must be 1
         bsz = src_tokens.size(0)
         beam_size = beam_size if beam_size is not None else self.beam_size
         maxlen = min(maxlen, self.maxlen) if maxlen is not None else self.maxlen
 
+        if enable_sample:
+            assert beam_size == 1
         encoder_outs = []
         for model in self.models:
             model.eval()
@@ -165,9 +170,10 @@ class SequenceGenerator(object):
                     for each hypothesis
             """
             assert bbsz_idx.numel() == scores.numel()
+            sum_log_probs = scores
             norm_scores = scores/math.pow(step+1, self.len_penalty) if self.normalize_scores else scores
             sents_seen = set()
-            for idx, score in zip(bbsz_idx.cpu(), norm_scores.cpu()):
+            for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs.cpu()):
                 sent = idx // beam_size
                 sents_seen.add(sent)
 
@@ -179,6 +185,7 @@ class SequenceGenerator(object):
                         'tokens': hypo,
                         'score': score,
                         'alignment': alignment,
+                        'sum_log_prob': sum_log_prob
                     }
 
                 if len(finalized[sent]) < beam_size:
@@ -212,6 +219,11 @@ class SequenceGenerator(object):
                     model.decoder.reorder_incremental_state(reorder_state)
 
             probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)
+            cand_indices = buffer('cand_indices')
+            if enable_sample:
+                # must sampled before cumulation operation
+                torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
+
             if step == 0:
                 # at the first step all hypotheses are equally likely, so use
                 # only the first beam
@@ -227,9 +239,14 @@ class SequenceGenerator(object):
             # take the best 2 x beam_size predictions. We'll choose the first
             # beam_size of these which don't predict eos to continue with.
             cand_scores = buffer('cand_scores', type_of=scores)
-            cand_indices = buffer('cand_indices')
             cand_beams = buffer('cand_beams')
-            probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
+
+            if enable_sample:
+                # sampled based on cumulative probs; maybe experiment with it
+                # torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
+                torch.gather(probs.view(bsz, -1), 1, cand_indices, out=cand_scores)
+            else:
+                probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
             torch.div(cand_indices, self.vocab_size, out=cand_beams)
             cand_indices.fmod_(self.vocab_size)
 
