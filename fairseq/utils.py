@@ -37,7 +37,7 @@ def build_criterion(args, dataset):
         return criterions.LabelSmoothedCrossEntropyCriterion(args.label_smoothing, padding_idx)
     else:
         print("args.label_smoothing:"+str(args.label_smoothing))
-        return criterions.CrossEntropyCriterion(padding_idx)
+        return criterions.CrossEntropyCriterion(padding_idx,args.enable_topic)
 
 
 def torch_persistent_save(*args, **kwargs):

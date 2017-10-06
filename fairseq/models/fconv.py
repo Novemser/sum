@@ -458,10 +458,10 @@ class Decoder(nn.Module):
         """
         ###x_topic_mask = x_topic * self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)) 
         
-        x_topic_mask = x_topic * torch.autograd.Variable(self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)), requires_grad=False)     
-        print("x_topic_mask.size():"+str(x_topic_mask.size()))
+        ###x_topic_mask = x_topic * torch.autograd.Variable(self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)), requires_grad=False)     
+        ###print("x_topic_mask.size():"+str(x_topic_mask.size()))
         
-        return x,x_topic_mask
+        return x,x_topic,self.topic_words_mask
         ###return (x+x_topic)
 
     def context_size(self):
