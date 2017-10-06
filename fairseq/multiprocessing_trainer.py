@@ -139,11 +139,11 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         # aggregate losses and gradient norms
         losses, grad_norms = Future.gen_tuple_list(losses)
-        print("train step losses2:"+str(losses))
-        print("train step grad_norms:"+str(grad_norms))
+        ###print("train step losses2:"+str(losses))
+        ###print("train step grad_norms:"+str(grad_norms))
         loss = criterion.aggregate(losses)
-        print("train step loss:"+str(loss))
-        print("train step grad_norms[0]:"+str(grad_norms[0]))
+        ###print("train step loss:"+str(loss))
+        ###print("train step grad_norms[0]:"+str(grad_norms[0]))
 
         return loss, grad_norms[0]
 
@@ -173,10 +173,10 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             )
             """
             loss_ = criterion(net_output, self._sample)
-            print("loss_"+str(loss_))
+            ###print("loss_"+str(loss_))
             loss_.backward()
             loss = loss_.data[0]
-            print("loss"+str(loss))
+            ###print("loss"+str(loss))
 
         # flatten grads into a contiguous block of memory
         if self.flat_grads is None:

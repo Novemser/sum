@@ -36,9 +36,9 @@ class CrossEntropyCriterion(FairseqCriterion):
             topic_words_mask = net_output[2]
             input_exp = torch.exp(input) + torch.exp(input_topic) * torch.autograd.Variable(topic_words_mask.expand(input_topic.size(0), topic_words_mask.size(0)), requires_grad=False)
             input_softmax = input_exp / torch.sum(input_exp,-1).view(input_exp.size(0),1).expand(input_exp.size(0),input_exp.size(1))
-            print("torch.sum(input_exp,-1):"+str(torch.sum(input_exp,-1)[0:10]))
+            ###print("torch.sum(input_exp,-1):"+str(torch.sum(input_exp,-1)[0:10]))
             loss = F.nll_loss(torch.log(input_softmax), target, size_average=False, ignore_index=self.padding_idx)
-            print("loss:"+str(loss))
+            ###print("loss:"+str(loss))
         else:        
             input = net_output.view(-1, net_output.size(-1)) ###no softmax yet  1296x8789
             loss = F.cross_entropy(input, target, size_average=False, ignore_index=self.padding_idx)   ###self.padding_idx:1
