@@ -32,7 +32,7 @@ class CrossEntropyCriterion(FairseqCriterion):
         ###print("CrossEntropyCriterion target:"+str(target.size(0)))
         ###print("self.padding_idx:"+str(self.padding_idx))
         loss = F.cross_entropy(input, target, size_average=False, ignore_index=self.padding_idx)
-        ###print("loss:"+str(loss))
+        print("loss:"+str(loss))
         ###print("self.denom:"+str(self.denom))
         ###print("loss / self.denom :"+str(loss / self.denom))
         return loss / self.denom
