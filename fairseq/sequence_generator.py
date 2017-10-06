@@ -16,8 +16,8 @@ from fairseq import utils
 
 
 class SequenceGenerator(object):
-    def __init__(self, models, dst_dict, beam_size=1, minlen=1, maxlen=200,
-                 stop_early=True, normalize_scores=True, len_penalty=1):
+    def __init__(self, models, dst_dict, beam_size=1, minlen=4, maxlen=200,
+                 stop_early=True, normalize_scores=True, len_penalty=1,enable_topic=True):
         """Generates translations of a given source sentence.
 
         Args:
@@ -41,6 +41,7 @@ class SequenceGenerator(object):
         self.stop_early = stop_early
         self.normalize_scores = normalize_scores
         self.len_penalty = len_penalty
+        self.enable_topic = enable_topic
 
     def cuda(self):
         for model in self.models:
@@ -322,11 +323,20 @@ class SequenceGenerator(object):
         avg_probs = None
         avg_attn = None
         for model, encoder_out in zip(self.models, encoder_outs):
-            decoder_out, attn = model.decoder(tokens, positions, encoder_out)
-            probs = F.softmax(decoder_out[:, -1, :]).data
-            print("F.softmax(decoder_out[:, -1, :]):"+str(F.softmax(decoder_out[:, -1, :])))
-            print("probs:"+str(probs))
-            attn = attn[:, -1, :].data
+            ###decoder_out, attn = model.decoder(tokens, positions, encoder_out)
+            ###probs = F.softmax(decoder_out[:, -1, :]).data
+            if self.enable_topic :
+                x, x_topic, attn_scores, attn_scores_topic, topic_words_mask= model.decoder(tokens, positions, encoder_out)
+                logits_exp = torch.exp(x) + torch.exp(x_topic) * torch.autograd.Variable(topic_words_mask.expand(x_topic.size(0), x_topic.size(1), topic_words_mask.size(0)), requires_grad=False)
+                print("logits_exp.size():"+str(logits_exp.size()))
+                probs =( logits_exp / torch.sum(logits_exp,-1).view(logits_exp.size(0), logits_exp.size(1), 1).expand(logits_exp.size(0), logits_exp.size(1), logits_exp.size(2)) ).data
+                print("probs:"+str(probs))
+                attn = (attn_scores[:, -1, :]+attn_scores_topic[:, -1, :]).data
+            else:
+                decoder_out, attn = model.decoder(tokens, positions, encoder_out)
+                probs = F.softmax(decoder_out[:, -1, :]).data
+                attn = attn[:, -1, :].data
+                
             if avg_probs is None or avg_attn is None:
                 avg_probs = probs
                 avg_attn = attn

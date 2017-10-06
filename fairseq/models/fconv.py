@@ -563,7 +563,7 @@ class Decoder(nn.Module):
         num_attn_layers = len(self.attention)
         for proj, conv, attention in zip(self.projections, self.convolutions, self.attention):
             residual = x if proj is None else proj(x)
-            print("x:"+str(x.size()))
+            ###print("x:"+str(x.size()))   ###x:torch.Size([5, 1, 256])
             x = conv.incremental_forward(x)
             x = F.glu(x)
 
@@ -596,7 +596,7 @@ class Decoder(nn.Module):
         num_attn_layers_topic = len(self.attention_topic)
         for proj_topic, conv_topic, attention_topic in zip(self.projections_topic, self.convolutions_topic, self.attention_topic):
             residual_topic = x_topic if proj_topic is None else proj_topic(x_topic)
-            print("x_topic:"+str(x_topic.size()))
+            ###print("x_topic:"+str(x_topic.size()))  ###x_topic:torch.Size([5, 1, 8789])
             x_topic = conv_topic.incremental_forward(x_topic)
             x_topic = F.glu(x_topic)
 
@@ -615,13 +615,14 @@ class Decoder(nn.Module):
         # project back to size of vocabulary
         x_topic = self.fc2_topic(x_topic)
         x_topic = self.fc3_topic(x_topic)
+        ###print("x_topic:"+str(x_topic.size()))  ###x_topic:torch.Size([5, 1, 8789])
         
         ###x_topic_mask = x_topic * torch.autograd.Variable(self.topic_words_mask.expand(x_topic.size(0), x_topic.size(1), self.topic_words_mask.size(0)), requires_grad=False)       
         ###print("x_topic_mask.size():"+str(x_topic_mask.size()))
 
         ###return x, avg_attn_scores
         ###return x+x_topic_mask, avg_attn_scores+avg_attn_scores_topic
-        return x, x_topic, avg_attn_scores, avg_attn_scores_topic
+        return x, x_topic, avg_attn_scores, avg_attn_scores_topic, self.topic_words_mask
 
     def clear_incremental_state(self):
         """Clear all state used for incremental generation.
