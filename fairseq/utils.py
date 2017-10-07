@@ -85,7 +85,7 @@ def save_checkpoint(args, epoch, batch_offset, model, optimizer, lr_scheduler, v
     torch_persistent_save(state_dict, last_filename)
 
 
-def load_checkpoint(filename, model, optimizer, lr_scheduler, cuda_device=None):
+def load_checkpoint(filename, model, optimizer, lr_scheduler, args=None,  cuda_device=None):
     if not os.path.exists(filename):
         return 1, 0
     if cuda_device is None:
@@ -104,6 +104,8 @@ def load_checkpoint(filename, model, optimizer, lr_scheduler, cuda_device=None):
     
     model.load_state_dict(state['model'])
     optimizer.load_state_dict(state['optimizer'])
+    if args and args.hardset_lr:
+        optimizer.param_groups[0]['lr'] = args.lr
     lr_scheduler.best = state['best_loss']
     epoch = state['epoch'] + 1
     batch_offset = state['batch_offset']

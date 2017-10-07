@@ -136,7 +136,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
     def _async_load_checkpoint(self, rank, device_id, filename):
         return utils.load_checkpoint(filename, self.model, self.optimizer,
-                                     self.lr_scheduler, cuda_device=device_id)
+                                     self.lr_scheduler, args=self.args, cuda_device=device_id)
 
     def train_step(self, samples, criterion):
         """Do forward, backward and gradient step in parallel."""

@@ -43,6 +43,8 @@ def add_optimization_args(parser):
     group = parser.add_argument_group('Optimization')
     group.add_argument('--lr', '--learning-rate', default=0.25, type=float, metavar='LR',
                        help='initial learning rate')
+    group.add_argument('-hardset_lr', action='store_true',
+                      help='hard set learning rate to the one given by --lr instead of that of checkpoint')
     group.add_argument('--min-lr', metavar='LR', default=1e-5, type=float,
                        help='minimum learning rate')
     group.add_argument('--force-anneal', '--fa', default=0, type=int, metavar='N',
