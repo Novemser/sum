@@ -213,7 +213,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         mean_sum_log_prob = sum_if_not_none(mean_sum_log_probs)
         
         aggregate_res = Results(loss, grad_norms[0], 
-                                ml_loss.data[0], rl_loss, 
+                                ml_loss, rl_loss, 
                                 mean_rouge_greedy, mean_rouge_sampled, 
                                 mean_sum_log_prob)
 
@@ -261,7 +261,6 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             ml_loss = criterion(net_output, self._sample)
             if self.enable_rl:
                 loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
-                ml_loss = ml_loss.data[0]
                 mean_rouge_greedy = sum(rouge_greedy)/len(rouge_greedy)
                 mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
                 mean_sum_log_prob = sum(sum_log_probs)/len(sum_log_probs)
@@ -269,6 +268,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 loss_ = ml_loss
             loss_.backward()
             loss = loss_.data[0]
+            ml_loss = ml_loss.data[0]
 
 
         # flatten grads into a contiguous block of memory
