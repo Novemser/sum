@@ -47,11 +47,24 @@ def torch_persistent_save(*args, **kwargs):
 
 
 def save_checkpoint(args, epoch, batch_offset, model, optimizer, lr_scheduler, val_loss=None):
+    prefix_to_remove = 'decoder._orig' # TODO: better handle such case
+    copy_dict = model.state_dict()
+    keys = list(copy_dict.keys())
+    
+    for k in keys:
+        # print(k)
+        if prefix_to_remove in k:
+            # print('removed: {}'.format(k))
+            del copy_dict[k]
+            # print(k in copy_dict)
+    
+    # print(copy_dict.keys())       
     state_dict = {
         'args': args,
         'epoch': epoch,
         'batch_offset': batch_offset,
-        'model': model.state_dict(),
+        # 'model': model.state_dict(),
+        'model': copy_dict,
         'optimizer': optimizer.state_dict(),
         'best_loss': lr_scheduler.best,
         'val_loss': val_loss,
@@ -82,7 +95,13 @@ def load_checkpoint(filename, model, optimizer, lr_scheduler, cuda_device=None):
             filename,
             map_location=lambda s, l: default_restore_location(s, 'cuda:{}'.format(cuda_device))
         )
-
+    
+    '''
+    print(set(state['model'].keys()) - set(model.state_dict().keys()))
+    print('-----')
+    print(model.state_dict().keys())
+    '''
+    
     model.load_state_dict(state['model'])
     optimizer.load_state_dict(state['optimizer'])
     lr_scheduler.best = state['best_loss']
