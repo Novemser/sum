@@ -202,3 +202,14 @@ def evaluate(hypotheses, references, metric='rouge_l/f_score'):
     """
     scores = rouge(hypotheses, references)
     return scores[metric].item()
+
+def sum_if_not_none(x):
+    """
+    Sum x if it does not contain None
+    """
+    s = 0
+    for i in x:
+        if i is None:
+            return None
+        s += i
+        return s

@@ -203,12 +203,14 @@ def validate(args, epoch, trainer, criterion, dataset, subset, ngpus):
                              max_tokens=args.max_tokens,
                              max_positions=args.max_positions)
     loss_meter = AverageMeter()
+    rouge_greedy_meter = AverageMeter()
+    rouge_sampled_eter = AverageMeter()
 
     desc = '| epoch {:03d} | valid on \'{}\' subset'.format(epoch, subset)
     with progress_bar(itr, desc, leave=False) as t:
         for _, sample in data.skip_group_enumerator(t, ngpus):
             ntokens = sum(s['ntokens'] for s in sample)
-            loss = trainer.valid_step(sample, criterion)
+            loss, mean_rouge_greedy, mean_rouge_sampled = trainer.valid_step(sample, criterion)
             loss_meter.update(loss, ntokens)
             t.set_postfix(loss='{:.2f}'.format(loss_meter.avg))
 

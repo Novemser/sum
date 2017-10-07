@@ -86,15 +86,14 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.src_dict = src_dict
         self.dst_dict = dst_dict
         self.enable_rl = args.enable_rl
-        self.generator = None
         self.args = args
-        if self.enable_rl:
-            # Initialize generator
-            models = [model] # SequenceGenerator accepts a list of models
-            self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
-                                           stop_early=(not args.no_early_stop),
-                                           normalize_scores=(not args.unnormalized),
-                                           len_penalty=args.lenpen).cuda()
+        
+        # Initialize generator
+        models = [model] # SequenceGenerator accepts a list of models
+        self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
+                                       stop_early=(not args.no_early_stop),
+                                       normalize_scores=(not args.unnormalized),
+                                       len_penalty=args.lenpen).cuda()
 
     def _build_lr_scheduler(self):
         if self.args.force_anneal > 0:
@@ -176,7 +175,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
 
         return ref_hypo_res
-    
+        
     def train_step(self, samples, criterion):
         """Do forward, backward and gradient step in parallel."""
         assert isinstance(criterion, FairseqCriterion)
@@ -195,22 +194,11 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         losses, grad_norms, ml_losses, rl_losses, mean_rouge_greedy, mean_rouge_sampled, mean_sum_log_probs = Future.gen_tuple_list(res)
         loss = criterion.aggregate(losses)
         ml_loss = criterion.aggregate(ml_losses)
-        
-        def sum_if_not_none(x):
-            """
-            Sum x if it does not contain None
-            """
-            s = 0
-            for i in x:
-                if i is None:
-                    return None
-                s += i
-                return s
 
-        rl_loss = sum_if_not_none(rl_losses)
-        mean_rouge_greedy = sum_if_not_none(mean_rouge_greedy)
-        mean_rouge_sampled = sum_if_not_none(mean_rouge_sampled)
-        mean_sum_log_prob = sum_if_not_none(mean_sum_log_probs)
+        rl_loss = utils.sum_if_not_none(rl_losses)
+        mean_rouge_greedy = utils.sum_if_not_none(mean_rouge_greedy)
+        mean_rouge_sampled = utils.sum_if_not_none(mean_rouge_sampled)
+        mean_sum_log_prob = utils.sum_if_not_none(mean_sum_log_probs)
         
         aggregate_res = Results(loss, grad_norms[0], 
                                 ml_loss, rl_loss, 
@@ -316,25 +304,23 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         criterion.prepare(samples)
 
         # forward pass
-        losses = [
+        res = [
             self.call_async(rank, '_async_valid_step', criterion=criterion)
             for rank in range(self.num_replicas)
         ]
 
         # aggregate losses
-        loss = criterion.aggregate(Future.gen_list(losses))
-
-        return loss
+        losses, mean_rouge_greedy, mean_rouge_sampled = Future.gen_list(res)
+        loss = criterion.aggregate(losses)
+        mean_rouge_greedy = utils.sum_if_not_none(mean_rouge_greedy)
+        mean_rouge_sampled = utils.sum_if_not_none(mean_rouge_sampled)
+        
+        return loss, mean_rouge_greedy, mean_rouge_sampled
 
     def _async_valid_step(self, rank, device_id, criterion):
         if self._sample is None:
             return 0
         self.model.eval()
-        net_output = self.model(**self._sample['net_input'])
-        loss = criterion(net_output, self._sample)
-        
-        # evaluate rouge
-        '''
         self.generator.models = [self.model]       
         input = self._sample['net_input']
         
@@ -342,12 +328,19 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         refs = [item[0] for item in ref_hypo_res]
         greedy_sums = [item[1] for item in ref_hypo_res]
         sampled_sums = [item[2] for item in ref_hypo_res]
-        sum_log_probs = [item[3] for item in ref_hypo_res]
 
         rouge_greedy = [utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))]
         rouge_sampled = [utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))]
-        '''
-        return loss.data[0]
+        mean_rouge_greedy = sum(rouge_greedy) / len(rouge_greedy)
+        mean_rouge_sampled = sum(rouge_sampled) / len(rouge_sampled)
+        
+        net_output = self.model(**self._sample['net_input'])
+        loss = criterion(net_output, self._sample)
+        
+        # evaluate rouge
+        Validres = namedtuple('Validres', ['loss', 'mean_rouge_greedy', 'mean_rouge_sampled'])
+        validres = Validres(loss.data[0], mean_rouge_greedy, mean_rouge_sampled)
+        return validres
 
     def get_lr(self):
         """Get the current learning rate."""
