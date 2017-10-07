@@ -208,7 +208,6 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         return aggregate_res
 
     def _async_train_step(self, rank, device_id, criterion):
-        self.model.train()
 
         # If enable_rl, generate two outputs in inference model
         # 1) greedy
@@ -218,6 +217,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             # since deepcopy does not support our case, we do not use fast generation
             # cur_model = copy.deepcopy(self.model) # deep copy current model, since once made generation fast, cannot be trained
             # cur_model.make_generation_fast_(1, not args.no_beamable_mm) # for fast generation
+            self.model.eval()
             self.generator.models = [self.model]       
             input = self._sample['net_input']
             
@@ -238,7 +238,9 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             rl_loss /= len(rouge_greedy) # normalized by # sentences
         else:
             rl_loss = mean_rouge_greedy = mean_rouge_sampled = mean_sum_log_prob = None
-
+            
+        self.model.train()
+        
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
 
@@ -310,7 +312,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         ]
 
         # aggregate losses
-        losses, mean_rouge_greedy, mean_rouge_sampled = Future.gen_list(res)
+        losses, mean_rouge_greedy, mean_rouge_sampled = Future.gen_tuple_list(res)
         loss = criterion.aggregate(losses)
         mean_rouge_greedy = utils.sum_if_not_none(mean_rouge_greedy)
         mean_rouge_sampled = utils.sum_if_not_none(mean_rouge_sampled)
@@ -337,10 +339,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         net_output = self.model(**self._sample['net_input'])
         loss = criterion(net_output, self._sample)
         
-        # evaluate rouge
-        Validres = namedtuple('Validres', ['loss', 'mean_rouge_greedy', 'mean_rouge_sampled'])
-        validres = Validres(loss.data[0], mean_rouge_greedy, mean_rouge_sampled)
-        return validres
+        return loss.data[0], mean_rouge_greedy, mean_rouge_sampled
 
     def get_lr(self):
         """Get the current learning rate."""

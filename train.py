@@ -204,7 +204,7 @@ def validate(args, epoch, trainer, criterion, dataset, subset, ngpus):
                              max_positions=args.max_positions)
     loss_meter = AverageMeter()
     rouge_greedy_meter = AverageMeter()
-    rouge_sampled_eter = AverageMeter()
+    rouge_sampled_meter = AverageMeter()
 
     desc = '| epoch {:03d} | valid on \'{}\' subset'.format(epoch, subset)
     with progress_bar(itr, desc, leave=False) as t:
@@ -212,11 +212,17 @@ def validate(args, epoch, trainer, criterion, dataset, subset, ngpus):
             ntokens = sum(s['ntokens'] for s in sample)
             loss, mean_rouge_greedy, mean_rouge_sampled = trainer.valid_step(sample, criterion)
             loss_meter.update(loss, ntokens)
-            t.set_postfix(loss='{:.2f}'.format(loss_meter.avg))
+            rouge_greedy_meter.update(mean_rouge_greedy, 1)
+            rouge_sampled_meter.update(mean_rouge_sampled, 1)
+            t.set_postfix(collections.OrderedDict([
+                    ('loss', '{:.2f}'.format(loss_meter.avg)),
+                    ('ROUGE-L/f (greedy)', '{:.4f}'.format(rouge_greedy_meter.avg)),
+                    ('ROUGE-L/f (sampled)', '{:.4f}'.format(rouge_sampled_meter.avg))
+                    ]))
 
         val_loss = loss_meter.avg
-        t.write(desc + ' | valid loss {:2.2f} | valid ppl {:3.2f}'
-                .format(val_loss, math.pow(2, val_loss)))
+        t.write(desc + ' | valid loss {:2.2f} | valid ppl {:3.2f} | ROUGE-L (greedy): {:.4f} | ROUGE-L (sampled): {:.4f}'
+                .format(val_loss, math.pow(2, val_loss), rouge_greedy_meter.avg, rouge_sampled_meter.avg))
 
     # update and return the learning rate
     return val_loss
