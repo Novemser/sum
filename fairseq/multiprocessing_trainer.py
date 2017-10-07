@@ -213,7 +213,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         mean_sum_log_prob = sum_if_not_none(mean_sum_log_probs)
         
         aggregate_res = Results(loss, grad_norms[0], 
-                                ml_loss, rl_loss, 
+                                ml_loss.data[0], rl_loss, 
                                 mean_rouge_greedy, mean_rouge_sampled, 
                                 mean_sum_log_prob)
 
