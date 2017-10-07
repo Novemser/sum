@@ -20,9 +20,11 @@ from fairseq.multiprocessing_event_loop import MultiprocessingEventLoop, Future
 from fairseq.nag import NAG
 
 import copy
+from collections import namedtuple
 
-from fairseq.rouge import rouge
-
+# res tuples
+Results = namedtuple('Results', ['loss', 'grad_norm', 'ml_loss', 'rl_loss', 'mean_rouge_greedy', 'mean_rouge_sampled', 'mean_sum_log_prob'])
+        
 class MultiprocessingTrainer(MultiprocessingEventLoop):
     """Main class for multi-GPU training.
 
@@ -138,6 +140,43 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         return utils.load_checkpoint(filename, self.model, self.optimizer,
                                      self.lr_scheduler, args=self.args, cuda_device=device_id)
 
+    def generate(self, input):
+        """
+        Generate greedy and sampled outputs
+        """
+        def lstrip_pad(tensor):
+            pad = self.generator.pad
+            return tensor[tensor.eq(pad).sum():]
+        
+        args = self.args
+        srclen = input['src_tokens'].size(1)
+        greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                              enable_sample=False)
+        sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                             maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                             enable_sample=True)
+        
+        ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
+        for i, id in enumerate(self._sample['id']):
+            src = input['src_tokens'].data[i, :]
+            # remove padding from ref, which appears at the beginning
+            ref = lstrip_pad(self._sample['target'].data[i, :])
+            greedy_hypo = greedy_hypos[i]
+            sampled_hypo = sampled_hypos[i]
+
+            ref = ref.int().cpu()
+            # we don't need sum_log_probs for greedy output
+            ref_str, greedy_hypo_str, _ = utils.display_hypotheses(id, src, None, ref, 
+                                                                 greedy_hypo[:min(len(greedy_hypo), args.nbest)],
+                                                                 self.src_dict, self.dst_dict)
+            _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, src, None, ref, 
+                                                                 sampled_hypo[:min(len(sampled_hypo), args.nbest)],
+                                                                 self.src_dict, self.dst_dict)
+            ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
+
+        return ref_hypo_res
+    
     def train_step(self, samples, criterion):
         """Do forward, backward and gradient step in parallel."""
         assert isinstance(criterion, FairseqCriterion)
@@ -147,16 +186,38 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         criterion.prepare(samples)
 
         # forward pass, backward pass and gradient step
-        losses = [
+        # res is namedtuple
+        res = [
             self.call_async(rank, '_async_train_step', criterion=criterion)
             for rank in range(self.num_replicas)
         ]
-
         # aggregate losses and gradient norms
-        losses, grad_norms = Future.gen_tuple_list(losses)
+        losses, grad_norms, ml_losses, rl_losses, mean_rouge_greedy, mean_rouge_sampled, mean_sum_log_probs = Future.gen_tuple_list(res)
         loss = criterion.aggregate(losses)
+        ml_loss = criterion.aggregate(ml_losses)
+        
+        def sum_if_not_none(x):
+            """
+            Sum x if it does not contain None
+            """
+            s = 0
+            for i in x:
+                if i is None:
+                    return None
+                s += i
+                return s
 
-        return loss, grad_norms[0]
+        rl_loss = sum_if_not_none(rl_losses)
+        mean_rouge_greedy = sum_if_not_none(mean_rouge_greedy)
+        mean_rouge_sampled = sum_if_not_none(mean_rouge_sampled)
+        mean_sum_log_prob = sum_if_not_none(mean_sum_log_probs)
+        
+        aggregate_res = Results(loss, grad_norms[0], 
+                                ml_loss, rl_loss, 
+                                mean_rouge_greedy, mean_rouge_sampled, 
+                                mean_sum_log_prob)
+
+        return aggregate_res
 
     def _async_train_step(self, rank, device_id, criterion):
         self.model.train()
@@ -171,58 +232,15 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             # cur_model.make_generation_fast_(1, not args.no_beamable_mm) # for fast generation
             self.generator.models = [self.model]       
             input = self._sample['net_input']
-            srclen = input['src_tokens'].size(1)
             
-            def generate():
-                """
-                Generate greedy and sampled outputs
-                """
-                def lstrip_pad(tensor):
-                    pad = self.generator.pad
-                    return tensor[tensor.eq(pad).sum():]
-                
-                greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
-                                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
-                                      enable_sample=False)
-                sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
-                                     maxlen=(args.max_len_a*srclen + args.max_len_b), 
-                                     enable_sample=True)
-                
-                ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
-                for i, id in enumerate(self._sample['id']):
-                    src = input['src_tokens'].data[i, :]
-                    # remove padding from ref, which appears at the beginning
-                    ref = lstrip_pad(self._sample['target'].data[i, :])
-                    greedy_hypo = greedy_hypos[i]
-                    sampled_hypo = sampled_hypos[i]
-
-                    ref = ref.int().cpu()
-                    # we don't need sum_log_probs for greedy output
-                    ref_str, greedy_hypo_str, _ = utils.display_hypotheses(id, src, None, ref, 
-                                                                         greedy_hypo[:min(len(greedy_hypo), args.nbest)],
-                                                                         self.src_dict, self.dst_dict)
-                    _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, src, None, ref, 
-                                                                         sampled_hypo[:min(len(sampled_hypo), args.nbest)],
-                                                                         self.src_dict, self.dst_dict)
-                    ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
-
-                return ref_hypo_res
-            ref_hypo_res = generate()
+            ref_hypo_res = self.generate(input)
             refs = [item[0] for item in ref_hypo_res]
             greedy_sums = [item[1] for item in ref_hypo_res]
             sampled_sums = [item[2] for item in ref_hypo_res]
             sum_log_probs = [item[3] for item in ref_hypo_res]
 
-            def evaluate(hypotheses, references, metric='rouge_l/f_score'):
-                """
-                summary: []
-                reference: []
-                """
-                scores = rouge(hypotheses, references)
-                return scores[metric].item()
-
-            rouge_greedy = [evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))]
-            rouge_sampled = [evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))]
+            rouge_greedy = [utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))]
+            rouge_sampled = [utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))]
             
             
             rl_loss = 0
@@ -230,6 +248,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             for r_g, r_s, sum_log_prob in zip(rouge_greedy, rouge_sampled, sum_log_probs):
                 rl_loss += (r_g - r_s) * sum_log_prob
             rl_loss /= len(rouge_greedy) # normalized by # sentences
+        else:
+            rl_loss = mean_rouge_greedy = mean_rouge_sampled = mean_sum_log_prob = None
 
         # zero grads even if net_input is None, since we will all-reduce them
         self.optimizer.zero_grad()
@@ -241,18 +261,15 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             ml_loss = criterion(net_output, self._sample)
             if self.enable_rl:
                 loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
-                print('\n mixed_loss: {:^10.4f}| ml_loss: {:^10.4f}| rl_loss: {:^10.4f}| mean_rouge_greedy: {:^10.4f}| mean_rouge_sampled: {:^10.4f}| mean_sum_log_prob: {:^10.4f}'.format(
-                        loss_.data[0],
-                        ml_loss.data[0],
-                        rl_loss,
-                        sum(rouge_greedy)/len(rouge_greedy), 
-                        sum(rouge_sampled)/len(rouge_sampled),
-                        sum(sum_log_probs)/len(sum_log_probs)))
-                # print(greedy_sums[0] if greedy_sums else "NONE")
+                ml_loss = ml_loss.data[0]
+                mean_rouge_greedy = sum(rouge_greedy)/len(rouge_greedy)
+                mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
+                mean_sum_log_prob = sum(sum_log_probs)/len(sum_log_probs)
             else:
                 loss_ = ml_loss
             loss_.backward()
             loss = loss_.data[0]
+
 
         # flatten grads into a contiguous block of memory
         if self.flat_grads is None:
@@ -267,7 +284,10 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # take an optimization step
         self.optimizer.step()
 
-        return loss, grad_norm
+        res = Results(loss=loss, grad_norm=grad_norm, ml_loss=ml_loss, 
+                      rl_loss=rl_loss, mean_rouge_greedy=mean_rouge_greedy, 
+                      mean_rouge_sampled=mean_rouge_sampled, mean_sum_log_prob=mean_sum_log_prob)
+        return res
 
     def _flatten_grads_(self, model):
         num_params = sum(p.data.numel() for p in model.parameters())
@@ -312,6 +332,21 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.model.eval()
         net_output = self.model(**self._sample['net_input'])
         loss = criterion(net_output, self._sample)
+        
+        # evaluate rouge
+        '''
+        self.generator.models = [self.model]       
+        input = self._sample['net_input']
+        
+        ref_hypo_res = self.generate(input)
+        refs = [item[0] for item in ref_hypo_res]
+        greedy_sums = [item[1] for item in ref_hypo_res]
+        sampled_sums = [item[2] for item in ref_hypo_res]
+        sum_log_probs = [item[3] for item in ref_hypo_res]
+
+        rouge_greedy = [utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))]
+        rouge_sampled = [utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))]
+        '''
         return loss.data[0]
 
     def get_lr(self):

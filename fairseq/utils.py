@@ -16,6 +16,8 @@ from torch.serialization import default_restore_location
 
 from fairseq import criterions, data, models
 
+from fairseq.rouge import rouge
+
 
 def parse_args_and_arch(parser):
     args = parser.parse_args()
@@ -193,3 +195,10 @@ def display_hypotheses(id, src, orig, ref, hypos, src_dict, dst_dict):
         #    hypo_str = replace_unk(hypo_str, align_str, orig, unk_symbol(dst_dict))
     return ref_str, hypo_str, sum_log_probs
 
+def evaluate(hypotheses, references, metric='rouge_l/f_score'):
+    """
+    summary: []
+    reference: []
+    """
+    scores = rouge(hypotheses, references)
+    return scores[metric].item()

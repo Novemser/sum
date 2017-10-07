@@ -138,11 +138,19 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
         for i, sample in data.skip_group_enumerator(t, num_gpus, batch_offset):
             ###print("i:"+str(i)+" sample:"+str(sample)) ###id,src_tokens,input_tokens,input_positions,target,src_positions,ntokens
             ###print("i:"+str(i)+" sample len:"+str(len(sample))+" sample id:"+str(sample[0]['id'])+" sample src_tokens:"+str(sample[0]['src_tokens'][0]))
-            loss, grad_norm = trainer.train_step(sample, criterion)
-
+            aggregate_res = trainer.train_step(sample, criterion)
+            mixed_loss = aggregate_res.loss
+            ml_loss = aggregate_res.ml_loss
+            grad_norm = aggregate_res.grad_norm
+            mixed_loss = aggregate_res.loss
+            rl_loss = aggregate_res.rl_loss
+            mean_rouge_greedy = aggregate_res.mean_rouge_greedy
+            mean_rouge_sampled = aggregate_res.mean_rouge_sampled
+            mean_sum_log_prob = aggregate_res.mean_sum_log_prob
+            
             ntokens = sum(s['ntokens'] for s in sample)
             src_size = sum(s['src_tokens'].size(0) for s in sample)
-            loss_meter.update(loss, ntokens)
+            loss_meter.update(ml_loss, ntokens)
             bsz_meter.update(src_size)
             wpb_meter.update(ntokens)
             wps_meter.update(ntokens)
@@ -150,7 +158,7 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
             gnorm_meter.update(grad_norm)
 
             t.set_postfix(collections.OrderedDict([
-                ('loss', '{:.2f} ({:.2f})'.format(loss, loss_meter.avg)),
+                ('loss', '{:.2f} ({:.2f})'.format(ml_loss, loss_meter.avg)),
                 ('wps', '{:5d}'.format(round(wps_meter.avg))),
                 ('wpb', '{:5d}'.format(round(wpb_meter.avg))),
                 ('bsz', '{:5d}'.format(round(bsz_meter.avg))),
@@ -158,6 +166,17 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
                 ('clip', '{:3.0f}%'.format(clip_meter.avg * 100)),
                 ('gnorm', '{:.4f}'.format(gnorm_meter.avg)),
             ]))
+            
+            if args.enable_rl:
+                fmt_other = 'mixed_loss: {:^10.4f} | ml_loss: {:^10.4f}'
+                fmt_other += '| rl_loss: {:^10.4f} | mean_rouge_greedy: {:^10.4f}'
+                fmt_other += '| mean_rouge_sampled: {:^10.4f} | mean_sum_log_prob: {:^10.4f}'
+                print(fmt_other.format(mixed_loss,
+                                       ml_loss,
+                                       rl_loss,
+                                       mean_rouge_greedy, 
+                                       mean_rouge_sampled,
+                                       mean_sum_log_prob))
 
             if i == 0:
                 # ignore the first mini-batch in words-per-second calculation
