@@ -227,10 +227,10 @@ class SequenceGenerator(object):
                 # at the first step all hypotheses are equally likely, so use
                 # only the first beam
                 probs = probs.unfold(0, 1, beam_size).squeeze(2).contiguous()
-                probs_cum = probs.data
+                probs_cum = probs
             else:
                 # make probs contain cumulative scores for each hypothesis
-                probs_cum = torch.add(probs, scores.view(-1, 1)).data
+                probs_cum = torch.add(probs, scores.view(-1, 1))
 
             probs_ = torch.exp(probs.data).view(bsz, -1)
             cand_indices = buffer('cand_indices')
@@ -248,9 +248,9 @@ class SequenceGenerator(object):
             if enable_sample:
                 # must sampled before cumulation operation
                 cand_indices = torch.multinomial(probs_, cand_size, replacement=False)
-                cand_scores = torch.gather(probs.view(bsz, -1), 1, Variable(cand_indices))
+                cand_scores = torch.gather(probs_cum.view(bsz, -1), 1, Variable(cand_indices))
             else:
-                cand_scores, cand_indices = torch.topk(probs_cum.view(bsz, -1), cand_size)
+                cand_scores, cand_indices = torch.topk(probs_cum.data.view(bsz, -1), cand_size)
                 cand_scores = Variable(cand_scores)
                 
             cand_beams = torch.div(cand_indices, self.vocab_size)

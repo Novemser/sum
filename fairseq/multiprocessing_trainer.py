@@ -234,7 +234,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             rl_loss = 0
             
             for r_g, r_s, sum_log_prob in zip(rouge_greedy, rouge_sampled, sum_log_probs):
-                rl_loss = rl_loss + (r_g - r_s) * sum_log_prob
+                # rl_loss = rl_loss + (r_g - r_s) * sum_log_prob
+                rl_loss = rl_loss - r_s * sum_log_prob
             rl_loss = rl_loss / len(rouge_greedy) # normalized by # sentences
         else:
             rl_loss = mean_rouge_greedy = mean_rouge_sampled = mean_sum_log_prob = None
