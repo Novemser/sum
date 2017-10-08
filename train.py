@@ -178,7 +178,8 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
                                        mean_rouge_greedy, 
                                        mean_rouge_sampled,
                                        mean_sum_log_prob))
-
+                
+                print(mean_sum_log_prob)
             if i == 0:
                 # ignore the first mini-batch in words-per-second calculation
                 wps_meter.reset()

@@ -177,7 +177,7 @@ class SequenceGenerator(object):
             scores = scores.data
             norm_scores = scores/math.pow(step+1, self.len_penalty) if self.normalize_scores else scores
             sents_seen = set()
-            for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs.cpu()):
+            for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs):
                 sent = idx // beam_size
                 sents_seen.add(sent)
 
@@ -223,18 +223,19 @@ class SequenceGenerator(object):
                     model.decoder.reorder_incremental_state(reorder_state)
 
             probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)
-            cand_indices = buffer('cand_indices')
-            if enable_sample:
-                # must sampled before cumulation operation
-                cand_indices = torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False)
             if step == 0:
                 # at the first step all hypotheses are equally likely, so use
                 # only the first beam
                 probs = probs.unfold(0, 1, beam_size).squeeze(2).contiguous()
+                probs_cum = probs.data
             else:
                 # make probs contain cumulative scores for each hypothesis
-                probs = torch.add(probs, scores.view(-1, 1))
+                probs_cum = torch.add(probs, scores.view(-1, 1)).data
 
+            probs_ = torch.exp(probs.data).view(bsz, -1)
+            cand_indices = buffer('cand_indices')
+                
+                
             # record alignment to source tokens, based on attention
             _ignore_scores = buffer('_ignore_scores', type_of=scores)
             avg_attn_scores.topk(1, out=(_ignore_scores, align[:, step+1].unsqueeze(1)))
@@ -245,12 +246,14 @@ class SequenceGenerator(object):
             cand_beams = buffer('cand_beams')
 
             if enable_sample:
-                # sampled based on cumulative probs; maybe experiment with it
-                # torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
-                cand_scores = torch.gather(probs.view(bsz, -1), 1, cand_indices)
+                # must sampled before cumulation operation
+                cand_indices = torch.multinomial(probs_, cand_size, replacement=False)
+                cand_scores = torch.gather(probs.view(bsz, -1), 1, Variable(cand_indices))
             else:
-                cand_scores, cand_indices = torch.topk(probs.view(bsz, -1), cand_size)
-            cand_beams = torch.div(cand_indices, self.vocab_size).data
+                cand_scores, cand_indices = torch.topk(probs_cum.view(bsz, -1), cand_size)
+                cand_scores = Variable(cand_scores)
+                
+            cand_beams = torch.div(cand_indices, self.vocab_size)
             cand_indices = torch.fmod(cand_indices, self.vocab_size)
 
             # cand_bbsz_idx contains beam indices for the top candidate
@@ -262,10 +265,10 @@ class SequenceGenerator(object):
             eos_mask = cand_indices.eq(self.eos)
             if step >= self.minlen:
                 eos_bbsz_idx = buffer('eos_bbsz_idx')
-                cand_bbsz_idx.masked_select(eos_mask.data, out=eos_bbsz_idx)
+                cand_bbsz_idx.masked_select(eos_mask, out=eos_bbsz_idx)
                 if eos_bbsz_idx.numel() > 0:
                     eos_scores = buffer('eos_scores', type_of=scores.data)
-                    eos_scores = cand_scores.masked_select(eos_mask)
+                    eos_scores = cand_scores.masked_select(Variable(eos_mask))
                     num_remaining_sent -= finalize_hypos(step, eos_bbsz_idx, eos_scores)
 
             assert num_remaining_sent >= 0
@@ -276,7 +279,7 @@ class SequenceGenerator(object):
             # and values < cand_size indicate candidate active hypos.
             # After, the min values per row are the top candidate active hypos
             active_mask = buffer('active_mask')
-            active_mask = torch.add((eos_mask*cand_size).data.type_as(cand_offsets), cand_offsets)
+            active_mask = torch.add((eos_mask*cand_size).type_as(cand_offsets), cand_offsets)
 
             # get the top beam_size active hypotheses, which are just the hypos
             # with the smallest values in active_mask
@@ -300,7 +303,7 @@ class SequenceGenerator(object):
             # copy tokens for active hypotheses
             torch.index_select(tokens[:, :step+1], dim=0, index=active_bbsz_idx,
                                out=tokens_buf[:, :step+1])
-            cand_indices.data.gather(1, active_hypos,
+            cand_indices.gather(1, active_hypos,
                                 out=tokens_buf.view(bsz, beam_size, -1)[:, :, step+1])
 
             # copy attention/alignment for active hypotheses
@@ -344,9 +347,9 @@ class SequenceGenerator(object):
                 avg_probs = probs
                 avg_attn = attn
             else:
-                avg_probs.add_(probs)
+                avg_probs = torch.add(avg_probs, probs)
                 avg_attn.add_(attn)
-        avg_probs.div_(len(self.models))
+        avg_probs = torch.div(avg_probs, len(self.models))
         avg_probs = torch.log(avg_probs)
         avg_attn.div_(len(self.models))
 
