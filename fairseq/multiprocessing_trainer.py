@@ -93,7 +93,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
                                        stop_early=(not args.no_early_stop),
                                        normalize_scores=(not args.unnormalized),
-                                       len_penalty=args.lenpen).cuda()
+                                       len_penalty=args.lenpen, testing=False).cuda()
 
     def _build_lr_scheduler(self):
         if self.args.force_anneal > 0:
@@ -250,7 +250,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             net_output = self.model(**self._sample['net_input'])
             ml_loss = criterion(net_output, self._sample)
             if self.enable_rl:
-                loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
+                #loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
+                loss_ = ml_loss
                 mean_rouge_greedy = sum(rouge_greedy)/len(rouge_greedy)
                 mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
                 mean_sum_log_prob = sum(sum_log_probs)/len(sum_log_probs)

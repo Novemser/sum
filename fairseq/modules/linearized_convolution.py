@@ -31,7 +31,7 @@ class LinearizedConvolution(ConvTBC):
             x = x[:-self.padding[0], :, :]
         return x
 
-    def incremental_forward(self, input):
+    def incremental_forward(self, input, testing=True):
         """Forward convolution one time step at a time.
 
         This function maintains an internal state to buffer signal and
@@ -61,7 +61,7 @@ class LinearizedConvolution(ConvTBC):
                 self.input_buffer[:, :-1, :] = self.input_buffer[:, 1:, :].clone()
             # append next input
             self.input_buffer[:, -1, :] = input[:, -1, :]
-            input = torch.autograd.Variable(self.input_buffer, volatile=True)
+            input = torch.autograd.Variable(self.input_buffer, volatile=testing)
         output = F.linear(input.view(bsz, -1), weight, self.bias)
         return output.view(bsz, 1, -1)
 

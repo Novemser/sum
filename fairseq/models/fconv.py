@@ -296,7 +296,7 @@ class Decoder(nn.Module):
 
         self._is_inference_incremental = False
 
-    def _incremental_forward(self, tokens, positions, encoder_out):
+    def _incremental_forward(self, tokens, positions, encoder_out, testing=True):
         assert self._is_inference_incremental
 
         # setup initial state
@@ -318,7 +318,7 @@ class Decoder(nn.Module):
         # embed tokens and positions
         x = self.embed_tokens(tokens) + self.embed_positions(positions)
         target_embedding = x
-
+        
         # project to size of convolution
         x = self.fc1(x)
 
@@ -327,9 +327,9 @@ class Decoder(nn.Module):
         num_attn_layers = len(self.attention)
         for proj, conv, attention in zip(self.projections, self.convolutions, self.attention):
             residual = x if proj is None else proj(x)
-            x = conv.incremental_forward(x)
+            x = conv.incremental_forward(x, testing)
             x = F.glu(x)
-
+            
             # attention
             if attention is not None:
                 x, attn_scores = attention(x, target_embedding, (encoder_a, encoder_b))
@@ -341,7 +341,7 @@ class Decoder(nn.Module):
 
             # residual
             x = (x + residual) * math.sqrt(0.5)
-
+        
         # project back to size of vocabulary
         x = self.fc2(x)
         x = self.fc3(x)

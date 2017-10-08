@@ -17,7 +17,8 @@ from fairseq import utils
 
 class SequenceGenerator(object):
     def __init__(self, models, dst_dict, beam_size=1, minlen=1, maxlen=200,
-                 stop_early=True, normalize_scores=True, len_penalty=1, enable_sample=False):
+                 stop_early=True, normalize_scores=True, len_penalty=1, 
+                 enable_sample=False, testing=True):
         """Generates translations of a given source sentence.
 
         Args:
@@ -27,6 +28,7 @@ class SequenceGenerator(object):
                 hypotheses, even though longer hypotheses might have better
                 normalized scores.
             normalize_scores: Normalize scores by the length of the output.
+            training: if requires_grad
         """
         self.models = models
         self.dict = dst_dict
@@ -42,6 +44,7 @@ class SequenceGenerator(object):
         self.normalize_scores = normalize_scores
         self.len_penalty = len_penalty
         self.enable_sample = enable_sample
+        self.testing = testing
 
     def cuda(self):
         for model in self.models:
@@ -64,7 +67,7 @@ class SequenceGenerator(object):
             return tensor[tensor.eq(self.pad).sum():]
 
         for sample in data_itr:
-            s = utils.prepare_sample(sample, volatile=True, cuda_device=cuda_device)
+            s = utils.prepare_sample(sample, volatile=self.testing, cuda_device=cuda_device)
             input = s['net_input']
             srclen = input['src_tokens'].size(1)
             if timer is not None:
@@ -171,6 +174,7 @@ class SequenceGenerator(object):
             """
             assert bbsz_idx.numel() == scores.numel()
             sum_log_probs = scores
+            scores = scores.data
             norm_scores = scores/math.pow(step+1, self.len_penalty) if self.normalize_scores else scores
             sents_seen = set()
             for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs.cpu()):
@@ -222,15 +226,14 @@ class SequenceGenerator(object):
             cand_indices = buffer('cand_indices')
             if enable_sample:
                 # must sampled before cumulation operation
-                torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
-
+                cand_indices = torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False)
             if step == 0:
                 # at the first step all hypotheses are equally likely, so use
                 # only the first beam
                 probs = probs.unfold(0, 1, beam_size).squeeze(2).contiguous()
             else:
                 # make probs contain cumulative scores for each hypothesis
-                probs.add_(scores.view(-1, 1))
+                probs = torch.add(probs, scores.view(-1, 1))
 
             # record alignment to source tokens, based on attention
             _ignore_scores = buffer('_ignore_scores', type_of=scores)
@@ -244,25 +247,25 @@ class SequenceGenerator(object):
             if enable_sample:
                 # sampled based on cumulative probs; maybe experiment with it
                 # torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
-                torch.gather(probs.view(bsz, -1), 1, cand_indices, out=cand_scores)
+                cand_scores = torch.gather(probs.view(bsz, -1), 1, cand_indices)
             else:
-                probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
-            torch.div(cand_indices, self.vocab_size, out=cand_beams)
-            cand_indices.fmod_(self.vocab_size)
+                cand_scores, cand_indices = torch.topk(probs.view(bsz, -1), cand_size)
+            cand_beams = torch.div(cand_indices, self.vocab_size).data
+            cand_indices = torch.fmod(cand_indices, self.vocab_size)
 
             # cand_bbsz_idx contains beam indices for the top candidate
             # hypotheses, with a range of values: [0, bsz*beam_size),
             # and dimensions: [bsz, cand_size]
-            cand_bbsz_idx = cand_beams.add_(bbsz_offsets)
-
+            cand_beams = torch.add(cand_beams, bbsz_offsets)
+            cand_bbsz_idx = cand_beams
             # finalize hypotheses that end in eos
             eos_mask = cand_indices.eq(self.eos)
             if step >= self.minlen:
                 eos_bbsz_idx = buffer('eos_bbsz_idx')
-                cand_bbsz_idx.masked_select(eos_mask, out=eos_bbsz_idx)
+                cand_bbsz_idx.masked_select(eos_mask.data, out=eos_bbsz_idx)
                 if eos_bbsz_idx.numel() > 0:
-                    eos_scores = buffer('eos_scores', type_of=scores)
-                    cand_scores.masked_select(eos_mask, out=eos_scores)
+                    eos_scores = buffer('eos_scores', type_of=scores.data)
+                    eos_scores = cand_scores.masked_select(eos_mask)
                     num_remaining_sent -= finalize_hypos(step, eos_bbsz_idx, eos_scores)
 
             assert num_remaining_sent >= 0
@@ -273,8 +276,7 @@ class SequenceGenerator(object):
             # and values < cand_size indicate candidate active hypos.
             # After, the min values per row are the top candidate active hypos
             active_mask = buffer('active_mask')
-            torch.add((eos_mask*cand_size).type_as(cand_offsets), cand_offsets,
-                      out=active_mask)
+            active_mask = torch.add((eos_mask*cand_size).data.type_as(cand_offsets), cand_offsets)
 
             # get the top beam_size active hypotheses, which are just the hypos
             # with the smallest values in active_mask
@@ -282,8 +284,8 @@ class SequenceGenerator(object):
             active_mask.topk(beam_size, 1, largest=False, out=(_ignore, active_hypos))
             active_bbsz_idx = buffer('active_bbsz_idx')
             cand_bbsz_idx.gather(1, active_hypos, out=active_bbsz_idx)
-            active_scores = cand_scores.gather(1, active_hypos,
-                                               out=scores.view(bsz, beam_size))
+            scores = torch.gather(cand_scores, 1, Variable(active_hypos))
+            active_scores = scores.view(bsz, beam_size)
 
             active_bbsz_idx = active_bbsz_idx.view(-1)
             active_scores = active_scores.view(-1)
@@ -298,7 +300,7 @@ class SequenceGenerator(object):
             # copy tokens for active hypotheses
             torch.index_select(tokens[:, :step+1], dim=0, index=active_bbsz_idx,
                                out=tokens_buf[:, :step+1])
-            cand_indices.gather(1, active_hypos,
+            cand_indices.data.gather(1, active_hypos,
                                 out=tokens_buf.view(bsz, beam_size, -1)[:, :, step+1])
 
             # copy attention/alignment for active hypotheses
@@ -329,14 +331,14 @@ class SequenceGenerator(object):
         positions = self.positions[:length].view(1, length)
 
         # wrap in Variables
-        tokens = Variable(tokens, volatile=True)
-        positions = Variable(positions, volatile=True)
-
+        tokens = Variable(tokens, volatile=self.testing)
+        positions = Variable(positions, volatile=self.testing)
+        
         avg_probs = None
         avg_attn = None
         for model, encoder_out in zip(self.models, encoder_outs):
-            decoder_out, attn = model.decoder(tokens, positions, encoder_out)
-            probs = F.softmax(decoder_out[:, -1, :]).data
+            decoder_out, attn = model.decoder(tokens, positions, encoder_out, testing=self.testing)
+            probs = F.softmax(decoder_out[:, -1, :])
             attn = attn[:, -1, :].data
             if avg_probs is None or avg_attn is None:
                 avg_probs = probs
@@ -345,7 +347,7 @@ class SequenceGenerator(object):
                 avg_probs.add_(probs)
                 avg_attn.add_(attn)
         avg_probs.div_(len(self.models))
-        avg_probs.log_()
+        avg_probs = torch.log(avg_probs)
         avg_attn.div_(len(self.models))
 
         return avg_probs, avg_attn
