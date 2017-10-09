@@ -11,6 +11,7 @@ Train a network on multiple GPUs using multiprocessing.
 """
 
 import torch
+from torch.autograd import Variable
 from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
 
 from fairseq import nccl, utils
@@ -19,7 +20,8 @@ from fairseq.criterions import FairseqCriterion
 from fairseq.multiprocessing_event_loop import MultiprocessingEventLoop, Future
 from fairseq.nag import NAG
 
-import copy
+import numpy as np
+
 from collections import namedtuple
 
 # res tuples
@@ -87,7 +89,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.dst_dict = dst_dict
         self.enable_rl = args.enable_rl
         self.args = args
-        
+        self.rl_crit = utils.RewardCriterion()
         # Initialize generator
         models = [model] # SequenceGenerator accepts a list of models
         self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
@@ -155,7 +157,9 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
                              enable_sample=True)
-        
+        #for model in self.generator.models:
+        #    model.decoder._stop_incremental_inference()
+            
         ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
         for i, id in enumerate(self._sample['id']):
             src = input['src_tokens'].data[i, :]
@@ -173,7 +177,13 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                                                                  sampled_hypo[:min(len(sampled_hypo), args.nbest)],
                                                                  self.src_dict, self.dst_dict)
             ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
-
+            
+            '''
+            if i == 0:
+                print('ref: {}'.format(ref_str))
+                print('greedy: {}'.format(greedy_hypo_str))
+                print('sampled: {}'.format(sampled_hypo_str))
+            '''
         return ref_hypo_res
         
     def train_step(self, samples, criterion):
@@ -227,16 +237,15 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             sampled_sums = [item[2] for item in ref_hypo_res]
             sum_log_probs = [item[3] for item in ref_hypo_res]
 
-            rouge_greedy = [utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))]
-            rouge_sampled = [utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))]
-            
-            
-            rl_loss = 0
-            
-            for r_g, r_s, sum_log_prob in zip(rouge_greedy, rouge_sampled, sum_log_probs):
-                # rl_loss = rl_loss + (r_g - r_s) * sum_log_prob
-                rl_loss = rl_loss - r_s * sum_log_prob
-            rl_loss = rl_loss / len(rouge_greedy) # normalized by # sentences
+            rouge_greedy = np.array([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
+            rouge_sampled = np.array([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
+            rouge_delta = Variable(torch.from_numpy(rouge_sampled - rouge_greedy).float().cuda(),
+                                   requires_grad=False)
+            seq_lens = Variable(torch.from_numpy(np.array([len(seq.split(' ')) for seq in sampled_sums])).float().cuda(),
+                                requires_grad=False)
+            sum_log_probs = torch.cat(sum_log_probs)
+  
+            rl_loss = self.rl_crit(sum_log_probs, seq_lens, rouge_delta)
         else:
             rl_loss = mean_rouge_greedy = mean_rouge_sampled = mean_sum_log_prob = None
             

@@ -287,8 +287,8 @@ class SequenceGenerator(object):
             active_mask.topk(beam_size, 1, largest=False, out=(_ignore, active_hypos))
             active_bbsz_idx = buffer('active_bbsz_idx')
             cand_bbsz_idx.gather(1, active_hypos, out=active_bbsz_idx)
-            scores = torch.gather(cand_scores, 1, Variable(active_hypos))
-            active_scores = scores.view(bsz, beam_size)
+            scores = torch.gather(cand_scores, 1, Variable(active_hypos)).view(-1)
+            active_scores = scores.clone()
 
             active_bbsz_idx = active_bbsz_idx.view(-1)
             active_scores = active_scores.view(-1)

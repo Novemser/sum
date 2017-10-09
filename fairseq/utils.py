@@ -9,6 +9,7 @@
 import logging
 import os
 import torch
+import torch.nn as nn
 import traceback
 
 from torch.autograd import Variable
@@ -213,3 +214,13 @@ def sum_if_not_none(x):
             return None
         s += i
         return s
+    
+class RewardCriterion(nn.Module):
+    def __init__(self):
+        super(RewardCriterion, self).__init__()
+
+    def forward(self, logprobs, seq_lens, reward):
+        output = - logprobs * reward
+        output = torch.sum(output) / torch.sum(seq_lens)
+        print(output)
+        return output
