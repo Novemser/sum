@@ -250,6 +250,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             net_output = self.model(**self._sample['net_input'])
             ml_loss = criterion(net_output, self._sample)
             if self.enable_rl:
+                
                 loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
                 mean_rouge_greedy = sum(rouge_greedy)/len(rouge_greedy)
                 mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
