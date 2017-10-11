@@ -12,6 +12,7 @@ Train a network on multiple GPUs using multiprocessing.
 
 import torch
 from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
+from torch.autograd import Variable
 
 from fairseq import nccl, utils
 from fairseq.sequence_generator import SequenceGenerator
@@ -19,8 +20,9 @@ from fairseq.criterions import FairseqCriterion
 from fairseq.multiprocessing_event_loop import MultiprocessingEventLoop, Future
 from fairseq.nag import NAG
 
-import copy
 from collections import namedtuple
+
+import numpy as np
 
 # res tuples
 Results = namedtuple('Results', ['loss', 'grad_norm', 'ml_loss', 'rl_loss', 'mean_rouge_greedy', 'mean_rouge_sampled', 'mean_sum_log_prob'])
@@ -93,7 +95,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
                                        stop_early=(not args.no_early_stop),
                                        normalize_scores=(not args.unnormalized),
-                                       len_penalty=args.lenpen).cuda()
+                                       len_penalty=args.lenpen, testing=False).cuda()
 
     def _build_lr_scheduler(self):
         if self.args.force_anneal > 0:
@@ -172,8 +174,9 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, src, None, ref, 
                                                                  sampled_hypo[:min(len(sampled_hypo), args.nbest)],
                                                                  self.src_dict, self.dst_dict)
-            ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
 
+            ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
+        
         return ref_hypo_res
         
     def train_step(self, samples, criterion):
@@ -226,16 +229,19 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             greedy_sums = [item[1] for item in ref_hypo_res]
             sampled_sums = [item[2] for item in ref_hypo_res]
             sum_log_probs = [item[3] for item in ref_hypo_res]
+            
+            seq_lens = torch.Tensor([len(seq.split(' ')) for seq in sampled_sums]).cuda()
 
-            rouge_greedy = [utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))]
-            rouge_sampled = [utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))]
+            sum_log_probs = torch.cat(sum_log_probs)
             
             
-            rl_loss = 0
+            rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
+            rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
+            rouge_delta = rouge_greedy - rouge_sampled
             
-            for r_g, r_s, sum_log_prob in zip(rouge_greedy, rouge_sampled, sum_log_probs):
-                rl_loss += (r_g - r_s) * sum_log_prob
-            rl_loss /= len(rouge_greedy) # normalized by # sentences
+            rl_loss = Variable(rouge_delta.cuda(), requires_grad=False) * sum_log_probs
+            rl_loss = torch.sum(rl_loss) / torch.sum(Variable(seq_lens, requires_grad=False))
+            
         else:
             rl_loss = mean_rouge_greedy = mean_rouge_sampled = mean_sum_log_prob = None
             
@@ -250,11 +256,12 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             net_output = self.model(**self._sample['net_input'])
             ml_loss = criterion(net_output, self._sample)
             if self.enable_rl:
-                
                 loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
                 mean_rouge_greedy = sum(rouge_greedy)/len(rouge_greedy)
                 mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
-                mean_sum_log_prob = sum(sum_log_probs)/len(sum_log_probs)
+                mean_sum_log_prob = torch.sum(sum_log_probs)/torch.sum(Variable(seq_lens, requires_grad=False))
+                mean_sum_log_prob = mean_sum_log_prob.data[0]
+                rl_loss = rl_loss.data[0]
             else:
                 loss_ = ml_loss
             loss_.backward()

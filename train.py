@@ -168,7 +168,7 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
             ]))
             
             if args.enable_rl:
-                fmt_other = 'mixed_loss: {:^10.4f} | ml_loss: {:^10.4f}'
+                fmt_other = '\n' + 'mixed_loss: {:^10.4f} | ml_loss: {:^10.4f}'
                 fmt_other += '| rl_loss: {:^10.4f} | mean_rouge_greedy: {:^10.4f}'
                 fmt_other += '| mean_rouge_sampled: {:^10.4f} | mean_sum_log_prob: {:^10.4f}'
                 print(fmt_other.format(mixed_loss,

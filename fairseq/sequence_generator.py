@@ -173,9 +173,10 @@ class SequenceGenerator(object):
             """
             assert bbsz_idx.numel() == scores.numel()
             sum_log_probs = scores
+            scores = scores.data
             norm_scores = scores/math.pow(step+1, self.len_penalty) if self.normalize_scores else scores
             sents_seen = set()
-            for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs.cpu()):
+            for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs):
                 sent = idx // beam_size
                 sents_seen.add(sent)
 
@@ -221,20 +222,18 @@ class SequenceGenerator(object):
                     model.decoder.reorder_incremental_state(reorder_state)
 
             probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)
-            probs = probs.data
-            cand_indices = buffer('cand_indices')
-            if enable_sample:
-                # must sampled before cumulation operation
-                torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
-
+            probs_ = probs.data
+            probs_ = probs_.unfold(0, 1, beam_size).squeeze(2).contiguous()
+            
             if step == 0:
                 # at the first step all hypotheses are equally likely, so use
                 # only the first beam
                 probs = probs.unfold(0, 1, beam_size).squeeze(2).contiguous()
             else:
                 # make probs contain cumulative scores for each hypothesis
-                probs.add_(scores.view(-1, 1))
-
+                probs = torch.add(probs, Variable(scores.view(-1, 1), requires_grad=False))
+                
+                
             # record alignment to source tokens, based on attention
             _ignore_scores = buffer('_ignore_scores', type_of=scores)
             avg_attn_scores.topk(1, out=(_ignore_scores, align[:, step+1].unsqueeze(1)))
@@ -243,16 +242,19 @@ class SequenceGenerator(object):
             # beam_size of these which don't predict eos to continue with.
             cand_scores = buffer('cand_scores', type_of=scores)
             cand_beams = buffer('cand_beams')
+            cand_indices = buffer('cand_indices')
 
             if enable_sample:
                 # sampled based on cumulative probs; maybe experiment with it
                 # torch.multinomial(probs.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
-                torch.gather(probs.view(bsz, -1), 1, cand_indices, out=cand_scores)
+                torch.multinomial(probs_.view(bsz, -1).exp(), cand_size, replacement=False, out=cand_indices)
+                cand_scores = torch.gather(probs.view(bsz, -1), 1, Variable(cand_indices, requires_grad=False))
             else:
-                probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
+                cand_scores, cand_indices = probs.view(bsz, -1).topk(cand_size)
+                cand_indices = cand_indices.data
             torch.div(cand_indices, self.vocab_size, out=cand_beams)
             cand_indices.fmod_(self.vocab_size)
-
+            
             # cand_bbsz_idx contains beam indices for the top candidate
             # hypotheses, with a range of values: [0, bsz*beam_size),
             # and dimensions: [bsz, cand_size]
@@ -265,7 +267,7 @@ class SequenceGenerator(object):
                 cand_bbsz_idx.masked_select(eos_mask, out=eos_bbsz_idx)
                 if eos_bbsz_idx.numel() > 0:
                     eos_scores = buffer('eos_scores', type_of=scores)
-                    cand_scores.masked_select(eos_mask, out=eos_scores)
+                    eos_scores = cand_scores.masked_select(Variable(eos_mask, requires_grad=False))
                     num_remaining_sent -= finalize_hypos(step, eos_bbsz_idx, eos_scores)
 
             assert num_remaining_sent >= 0
@@ -285,8 +287,8 @@ class SequenceGenerator(object):
             active_mask.topk(beam_size, 1, largest=False, out=(_ignore, active_hypos))
             active_bbsz_idx = buffer('active_bbsz_idx')
             cand_bbsz_idx.gather(1, active_hypos, out=active_bbsz_idx)
-            active_scores = cand_scores.gather(1, active_hypos,
-                                               out=scores.view(bsz, beam_size))
+            active_scores = cand_scores.gather(1, Variable(active_hypos, requires_grad=False))
+            cand_scores.data.gather(1, active_hypos, out=scores.view(bsz, beam_size))
 
             active_bbsz_idx = active_bbsz_idx.view(-1)
             active_scores = active_scores.view(-1)
