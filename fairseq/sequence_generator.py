@@ -17,7 +17,8 @@ from fairseq import utils
 
 class SequenceGenerator(object):
     def __init__(self, models, dst_dict, beam_size=1, minlen=1, maxlen=200,
-                 stop_early=True, normalize_scores=True, len_penalty=1, enable_sample=False):
+                 stop_early=True, normalize_scores=True, len_penalty=1, 
+                 enable_sample=False, testing=True):
         """Generates translations of a given source sentence.
 
         Args:
@@ -42,6 +43,7 @@ class SequenceGenerator(object):
         self.normalize_scores = normalize_scores
         self.len_penalty = len_penalty
         self.enable_sample = enable_sample
+        self.testing = testing
 
     def cuda(self):
         for model in self.models:
@@ -64,7 +66,7 @@ class SequenceGenerator(object):
             return tensor[tensor.eq(self.pad).sum():]
 
         for sample in data_itr:
-            s = utils.prepare_sample(sample, volatile=True, cuda_device=cuda_device)
+            s = utils.prepare_sample(sample, volatile=self.testing, cuda_device=cuda_device)
             input = s['net_input']
             srclen = input['src_tokens'].size(1)
             if timer is not None:
@@ -219,6 +221,7 @@ class SequenceGenerator(object):
                     model.decoder.reorder_incremental_state(reorder_state)
 
             probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)
+            probs = probs.data
             cand_indices = buffer('cand_indices')
             if enable_sample:
                 # must sampled before cumulation operation
@@ -329,23 +332,23 @@ class SequenceGenerator(object):
         positions = self.positions[:length].view(1, length)
 
         # wrap in Variables
-        tokens = Variable(tokens, volatile=True)
-        positions = Variable(positions, volatile=True)
+        tokens = Variable(tokens, volatile=self.testing)
+        positions = Variable(positions, volatile=self.testing)
 
         avg_probs = None
         avg_attn = None
         for model, encoder_out in zip(self.models, encoder_outs):
-            decoder_out, attn = model.decoder(tokens, positions, encoder_out)
-            probs = F.softmax(decoder_out[:, -1, :]).data
+            decoder_out, attn = model.decoder(tokens, positions, encoder_out, testing=self.testing)
+            probs = F.softmax(decoder_out[:, -1, :])
             attn = attn[:, -1, :].data
             if avg_probs is None or avg_attn is None:
                 avg_probs = probs
                 avg_attn = attn
             else:
-                avg_probs.add_(probs)
+                avg_probs = torch.add(avg_probs, probs)
                 avg_attn.add_(attn)
-        avg_probs.div_(len(self.models))
-        avg_probs.log_()
+        avg_probs = torch.div(avg_probs, len(self.models))
+        avg_probs = torch.log(avg_probs)
         avg_attn.div_(len(self.models))
 
         return avg_probs, avg_attn
