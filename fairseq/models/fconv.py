@@ -396,6 +396,14 @@ class Decoder(nn.Module):
 
             # residual
             x = (x + residual) * math.sqrt(0.5)
+            ###print("x"+str(x))
+            noise = random_list_generate_noise(0, 0.01, (x.size(0),x.size(1),x.size(2)) )
+            ###print(noise)
+            x += torch.autograd.Variable(torch.from_numpy(np.array(noise)).float().cuda() , requires_grad=False)
+            print("noise mean"+str(np.mean(noise)) )
+            print("noise std"+str(np.std(noise)) )
+            ###print("x mean"+str(np.mean(x.data.cpu().numpy())) )
+            ###print("x std"+str(np.std(x.data.cpu().numpy())) )
 
         # T x B x C -> B x T x C
         x = x.transpose(1, 0)
@@ -434,6 +442,12 @@ class Decoder(nn.Module):
 
             # residual
             x_topic = (x_topic + residual_topic) * math.sqrt(0.5)
+            noise = random_list_generate_noise(0, 0.01, (x_topic.size(0),x_topic.size(1),x_topic.size(2)) )
+            ###print(noise)
+            x_topic += torch.autograd.Variable(torch.from_numpy(np.array(noise)).float().cuda() , requires_grad=False)
+            ###print("x_topic"+str(x_topic))
+            print("x_topic mean"+str(np.mean(x_topic.cpu().data.numpy())) )
+            print("x_topic std"+str(np.std(x_topic.cpu().data.numpy())) )
 
         # T x B x C -> B x T x C
         x_topic = x_topic.transpose(1, 0)
@@ -798,6 +812,12 @@ def random_list_generate(min_value,max_value,list_size):  ######generate random 
     stddev=np.std(rarray)*10
     return [(value-mean)/stddev for value in list(rarray)]
 
+def random_list_generate_noise(min_value,max_value,list_size):  ######generate random numbers which mean 0, stddev 0.1
+    rarray=np.random.uniform(min_value,max_value,size=list_size)
+    mean=np.average(rarray)
+    stddev=np.std(rarray)*100
+    return [(value-mean)/stddev for value in list(rarray)]
+
 def build_model(args, dataset):
     ################calculate topic words and build target vocab topic words ids index 
     filename_topic_model = "giga_lda_model0716_"   
@@ -860,6 +880,7 @@ def build_model(args, dataset):
             ##vacab_topic_dict.append( [float(0)]*topic_emb_size )
             ### vocab_topic_emb[vocab_idx] = [float(0)]*topic_emb_size
             vocab_topic_emb[src_dict_word_idx[word]] = random_list_generate(0,1,256)
+    ###print("random_list_generate(0,1,256) std"+str(np.std(random_list_generate(0,1,256))) )
     
     padding_idx = dataset.dst_dict.pad()
     encoder = Encoder(
