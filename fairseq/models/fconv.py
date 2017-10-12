@@ -400,8 +400,8 @@ class Decoder(nn.Module):
             noise = random_list_generate_noise(0, 0.01, (x.size(0),x.size(1),x.size(2)) )
             ###print(noise)
             x += torch.autograd.Variable(torch.from_numpy(np.array(noise)).float().cuda() , requires_grad=False)
-            print("noise mean"+str(np.mean(noise)) )
-            print("noise std"+str(np.std(noise)) )
+            ###print("noise mean"+str(np.mean(noise)) )
+            ###print("noise std"+str(np.std(noise)) )
             ###print("x mean"+str(np.mean(x.data.cpu().numpy())) )
             ###print("x std"+str(np.std(x.data.cpu().numpy())) )
 
@@ -446,8 +446,8 @@ class Decoder(nn.Module):
             ###print(noise)
             x_topic += torch.autograd.Variable(torch.from_numpy(np.array(noise)).float().cuda() , requires_grad=False)
             ###print("x_topic"+str(x_topic))
-            print("x_topic mean"+str(np.mean(x_topic.cpu().data.numpy())) )
-            print("x_topic std"+str(np.std(x_topic.cpu().data.numpy())) )
+            ###print("x_topic mean"+str(np.mean(x_topic.cpu().data.numpy())) )
+            ###print("x_topic std"+str(np.std(x_topic.cpu().data.numpy())) )
 
         # T x B x C -> B x T x C
         x_topic = x_topic.transpose(1, 0)
