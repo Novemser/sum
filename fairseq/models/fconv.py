@@ -459,9 +459,9 @@ def parse_arch(args):
         args.decoder_out_embed_dim = 256
     elif args.arch == 'fconv_giga':
         args.encoder_embed_dim = 256
-        args.encoder_layers = '[(256, 3)] * 6'
+        args.encoder_layers = '[(256, 1)] * 6'
         args.decoder_embed_dim = 256
-        args.decoder_layers = '[(256, 3)] * 6'
+        args.decoder_layers = '[(256, 1)] * 6'
         args.decoder_out_embed_dim = 256 
     elif args.arch == 'fconv_giga_large':
         args.encoder_embed_dim = 512
