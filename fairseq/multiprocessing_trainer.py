@@ -247,7 +247,11 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
             #rouge_delta = rouge_greedy - rouge_sampled
             rouge_delta =  - rouge_sampled
-                
+            fmt = '\n'
+            fmt += 'ref: {}\n'
+            fmt += 'sampled_sum: {}\n'
+            fmt += 'len: {}, rouge_sampled: {}\n'
+            print(fmt.format(refs[0], sampled_sums[0], seq_lens[0], rouge_sampled[0]))
             rl_loss = Variable(rouge_delta.cuda(), requires_grad=False) * sum_log_probs
             rl_loss = torch.sum(rl_loss) / torch.sum(Variable(seq_lens, requires_grad=False))
             

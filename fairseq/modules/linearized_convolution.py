@@ -52,17 +52,17 @@ class LinearizedConvolution(ConvTBC):
 
         bsz = input.size(0)  # input: bsz x len x dim
         if kw > 1:
-            input = input.data
             if self.input_buffer is None:
-                self.input_buffer = input.new(bsz, kw, input.size(2))
+                self.input_buffer = torch.autograd.Variable(input.data.new(bsz, kw, input.size(2)))
                 self.input_buffer.zero_()
             else:
                 # shift buffer
                 self.input_buffer[:, :-1, :] = self.input_buffer[:, 1:, :].clone()
             # append next input
             self.input_buffer[:, -1, :] = input[:, -1, :]
-            input = torch.autograd.Variable(self.input_buffer, volatile=testing)
-        output = F.linear(input.view(bsz, -1), weight, self.bias)
+        else:
+            self.input_buffer = input
+        output = F.linear(self.input_buffer.view(bsz, -1), weight, self.bias)
         return output.view(bsz, 1, -1)
 
     def clear_buffer(self):
@@ -70,7 +70,9 @@ class LinearizedConvolution(ConvTBC):
 
     def reorder_buffer(self, new_order):
         if self.input_buffer is not None:
-            self.input_buffer = self.input_buffer.index_select(0, new_order)
+            self.input_buffer = torch.index_select(self.input_buffer, 
+                                                   0, 
+                                                   torch.autograd.Variable(new_order, requires_grad=False))
 
     def _get_linearized_weight(self):
         if self._linearized_weight is None:
