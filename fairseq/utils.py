@@ -183,17 +183,17 @@ def display_hypotheses(id, src, orig, ref, hypos, src_dict, dst_dict):
     bpe_symbol = '@@'
     id_str = '' if id is None else '-{}'.format(id)
     hypo_str = []
-    sum_log_probs = []
+    seq_log_probs = []
     # print('S{}\t{}'.format(id_str, src_str))
     if orig is not None:
         print('O{}\t{}'.format(id_str, orig.strip()))
     ref_str = to_sentence(dst_dict, ref, bpe_symbol, ref_unk=True)
     for hypo in hypos:
         hypo_str.append(to_sentence(dst_dict, hypo['tokens'], bpe_symbol))
-        sum_log_probs.append(hypo['sum_log_prob'])
+        seq_log_probs.append(hypo['log_prob'])
         # if args.unk_replace_dict != '':
         #    hypo_str = replace_unk(hypo_str, align_str, orig, unk_symbol(dst_dict))
-    return ref_str, hypo_str, sum_log_probs
+    return ref_str, hypo_str, seq_log_probs
 
 def evaluate(hypotheses, references, metric='rouge_l/f_score'):
     """

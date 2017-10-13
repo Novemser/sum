@@ -153,14 +153,14 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         
         args = self.args
         srclen = input['src_tokens'].size(1)
-        #greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
-        #                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
-        #                      enable_sample=True)
+        greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                              enable_sample=False)
         
         sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
                              enable_sample=True)
-        greedy_hypos = sampled_hypos
+        
         ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
         for i, id in enumerate(self._sample['id']):
             src = input['src_tokens'].data[i, :]
@@ -174,12 +174,16 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             ref_str, greedy_hypo_str, _ = utils.display_hypotheses(id, src, None, ref, 
                                                                  greedy_hypo[:min(len(greedy_hypo), args.nbest)],
                                                                  self.src_dict, self.dst_dict)
-            _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, src, None, ref, 
+            _, sampled_hypo_str, log_probs = utils.display_hypotheses(id, src, None, ref, 
                                                                  sampled_hypo[:min(len(sampled_hypo), args.nbest)],
                                                                  self.src_dict, self.dst_dict)
             #print('----------')
             #print('ref: {}\n greedy_hypo: {}\n sampled_hypo: {}'.format(ref_str, greedy_hypo_str, sampled_hypo_str))
-            ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
+            ref_hypo_res.append((ref_str, 
+                                 greedy_hypo_str[0], 
+                                 sampled_hypo_str[0], 
+                                 log_probs[0], 
+                                 sampled_hypo[:min(len(sampled_hypo), args.nbest)][0]['tokens'])) # beam_size = 1
         
         return ref_hypo_res
         
@@ -236,24 +240,31 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             refs = [item[0] for item in ref_hypo_res]
             greedy_sums = [item[1] for item in ref_hypo_res]
             sampled_sums = [item[2] for item in ref_hypo_res]
-            sum_log_probs = [item[3] for item in ref_hypo_res]
+            log_probs = [item[3] for item in ref_hypo_res]
+            sampled_hypos = [item[4] for item in ref_hypo_res]
             
             seq_lens = torch.Tensor([len(seq.split(' ')) for seq in sampled_sums]).cuda()
 
-            sum_log_probs = torch.cat(sum_log_probs)
+            seq_log_probs = torch.stack(log_probs, 1).transpose(0, 1)
+            sampled_hypos = torch.stack(sampled_hypos, 1).transpose(0, 1)
             
             
             rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
             rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
-            #rouge_delta = rouge_greedy - rouge_sampled
-            rouge_delta =  - rouge_sampled
-            fmt = '\n'
-            fmt += 'ref: {}\n'
-            fmt += 'sampled_sum: {}\n'
-            fmt += 'len: {}, rouge_sampled: {}\n'
-            print(fmt.format(refs[0], sampled_sums[0], seq_lens[0], rouge_sampled[0]))
-            rl_loss = Variable(rouge_delta.cuda(), requires_grad=False) * sum_log_probs
-            rl_loss = torch.sum(rl_loss) / torch.sum(Variable(seq_lens, requires_grad=False))
+            
+            rouge_delta = rouge_greedy - rouge_sampled
+            rouge_delta =  rouge_delta.view(-1, 1)
+            rouge_delta = rouge_delta.expand(seq_log_probs.size())
+            
+            seq_log_probs = seq_log_probs.contiguous().view(-1)
+            rouge_delta = rouge_delta.contiguous().view(-1).cuda()
+            
+            
+            mask = torch.ne(sampled_hypos, self.dst_dict.eos()).float().cuda()
+            mask = mask.contiguous().view(-1)
+            rl_loss = Variable(rouge_delta, requires_grad=False) * seq_log_probs * Variable(mask, requires_grad=False)
+            rl_loss = torch.sum(rl_loss) / torch.sum(mask)
+           
             
         else:
             rl_loss = mean_rouge_greedy = mean_rouge_sampled = mean_sum_log_prob = None
@@ -272,7 +283,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                 loss_ = args.loss_scale * rl_loss + (1 - args.loss_scale) * ml_loss
                 mean_rouge_greedy = sum(rouge_greedy)/len(rouge_greedy)
                 mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
-                mean_sum_log_prob = torch.sum(sum_log_probs)/torch.sum(Variable(seq_lens, requires_grad=False))
+                mean_sum_log_prob = torch.sum(seq_log_probs)/torch.sum(Variable(mask, requires_grad=False))
                 mean_sum_log_prob = mean_sum_log_prob.data[0]
                 rl_loss = rl_loss.data[0]
             else:
