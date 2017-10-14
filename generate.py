@@ -15,6 +15,8 @@ from fairseq.meters import StopwatchMeter, TimeMeter
 from fairseq.progress_bar import progress_bar
 from fairseq.sequence_generator import SequenceGenerator
 
+from fairseq.utils import to_sentence
+
 
 def main():
     parser = options.get_parser('Generation')
@@ -153,7 +155,7 @@ def to_token(dict, i, runk):
 def unk_symbol(dict, ref_unk=False):
     return '<{}>'.format(dict.unk_word) if ref_unk else dict.unk_word
 
-
+"""
 def to_sentence(dict, tokens, bpe_symbol=None, ref_unk=False):
     if torch.is_tensor(tokens) and tokens.dim() == 2:
         sentences = [to_sentence(dict, token) for token in tokens]
@@ -164,7 +166,7 @@ def to_sentence(dict, tokens, bpe_symbol=None, ref_unk=False):
     if bpe_symbol is not None:
         sent = sent.replace(bpe_symbol, '')
     return sent
-
+"""
 
 if __name__ == '__main__':
     main()

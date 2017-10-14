@@ -170,8 +170,9 @@ def to_sentence(dict, tokens, bpe_symbol=None, ref_unk=False):
         sentences = [to_sentence(dict, token) for token in tokens]
         return '\n'.join(sentences)
     eos = dict.eos()
+    pad = dict.pad()
     runk = unk_symbol(dict, ref_unk=ref_unk)
-    sent = ' '.join([to_token(dict, i, runk) for i in tokens if i != eos])
+    sent = ' '.join([to_token(dict, i, runk) for i in tokens if i != eos and i != pad])
     if bpe_symbol is not None:
         sent = sent.replace(bpe_symbol, '')
     return sent

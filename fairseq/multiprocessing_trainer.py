@@ -95,7 +95,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
                                        stop_early=(not args.no_early_stop),
                                        normalize_scores=(not args.unnormalized),
-                                       len_penalty=args.lenpen, testing=False).cuda()
+                                       len_penalty=args.lenpen).cuda()
 
         
 
@@ -230,7 +230,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             self.generator = SequenceGenerator(models, self.dst_dict, beam_size=1,
                                            stop_early=(not args.no_early_stop),
                                            normalize_scores=(not args.unnormalized),
-                                           len_penalty=args.lenpen, testing=False).cuda()
+                                           len_penalty=args.lenpen).cuda()
             # since deepcopy does not support our case, we do not use fast generation
             # cur_model = copy.deepcopy(self.model) # deep copy current model, since once made generation fast, cannot be trained
             # cur_model.make_generation_fast_(1, not args.no_beamable_mm) # for fast generation   
