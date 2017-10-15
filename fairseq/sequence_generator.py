@@ -139,13 +139,13 @@ class SequenceGenerator(object):
     
             torch.multinomial(probs.view(bsz, -1).data.exp(), cand_size, replacement=False, out=cand_indices)
             sampled_log_prob = probs.gather(1, Variable(cand_indices, requires_grad=False))
-            seq_log_probs[:, step] = sampled_log_prob.view(-1)
             cand_indices = cand_indices.view(-1)
             unfinished = unfinished * cand_indices.ne(self.eos)
             if unfinished.sum() == 0:
                 break
-            cand_indices = cand_indices * unfinished.type_as(cand_indices)
+            cand_indices = cand_indices * unfinished.type_as(cand_indices) + (1 - unfinished.type_as(cand_indices)) * self.pad
             tokens[:, step+1] = cand_indices
+            seq_log_probs[:, step] = sampled_log_prob.view(-1)
             
         for i in range(bsz):
             finalized[i].append(

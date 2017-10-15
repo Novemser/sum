@@ -153,13 +153,15 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         
         args = self.args
         srclen = input['src_tokens'].size(1)
-        greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
-                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
-                              enable_sample=False)
+        #greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+        #                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
+        #                      enable_sample=False)
         
         sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
                              enable_sample=True)
+        
+        greedy_hypos = sampled_hypos
         
         ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
         for i, id in enumerate(self._sample['id']):
@@ -252,7 +254,11 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
             rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
             
-            rouge_delta = rouge_greedy - rouge_sampled
+            # rouge_delta = rouge_greedy - rouge_sampled
+            rouge_delta = -rouge_sampled
+            print(refs[0])
+            print(sampled_sums[0])
+            
             rouge_delta =  rouge_delta.view(-1, 1)
             rouge_delta = rouge_delta.expand(seq_log_probs.size())
             
@@ -260,12 +266,12 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             rouge_delta = rouge_delta.contiguous().view(-1).cuda()
             
             
-            mask = torch.ne(sampled_hypos, self.dst_dict.eos()).float().cuda()
+            mask = torch.ne(sampled_hypos, self.dst_dict.pad()).float().cuda()
             mask = mask.contiguous().view(-1)
-            rl_loss = Variable(rouge_delta, requires_grad=False) * seq_log_probs * Variable(mask, requires_grad=False)
+            rl_loss = Variable(rouge_delta, requires_grad=False) * \
+                seq_log_probs * Variable(mask, requires_grad=False)
             rl_loss = torch.sum(rl_loss) / torch.sum(mask)
-           
-            
+       
         else:
             rl_loss = mean_rouge_greedy = mean_rouge_sampled = mean_sum_log_prob = None
             
