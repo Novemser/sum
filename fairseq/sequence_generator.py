@@ -87,11 +87,11 @@ class SequenceGenerator(object):
         self.testing = not enable_sample
         with ExitStack() as stack:
             for model in self.models:
-                stack.enter_context(model.decoder.incremental_inference())
-            if enable_sample:
-                return self.sample(src_tokens, src_positions, beam_size, maxlen)
-            else:
+                stack.enter_context(model.decoder.incremental_inference(self.testing))
+            if self.testing:
                 return self._generate(src_tokens, src_positions, beam_size, maxlen)
+            else:
+                return self.sample(src_tokens, src_positions, beam_size, maxlen)                
 
     def sample(self, src_tokens, src_positions, beam_size=None, maxlen=None):
         bsz = src_tokens.size(0)
@@ -395,7 +395,11 @@ class SequenceGenerator(object):
         avg_probs = None
         avg_attn = None
         for model, encoder_out in zip(self.models, encoder_outs):
-            decoder_out, attn = model.decoder(tokens, positions, encoder_out, testing=self.testing)
+            if self.testing:
+                decoder_out, attn = model.decoder(tokens, positions, encoder_out, testing=self.testing)
+            else:
+                decoder_out, attn = model.decoder._incremental_forward(tokens, positions, 
+                                                               encoder_out, testing=self.testing)
             probs = F.softmax(decoder_out[:, -1, :])
             attn = attn[:, -1, :].data
             if avg_probs is None or avg_attn is None:

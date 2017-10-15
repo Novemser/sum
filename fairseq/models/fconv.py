@@ -207,7 +207,6 @@ class Decoder(nn.Module):
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
-
         # temporal convolutions
         for proj, conv, attention in zip(self.projections, self.convolutions, self.attention):
             residual = x if proj is None else proj(x)
@@ -243,7 +242,7 @@ class Decoder(nn.Module):
             context += conv.kernel_size[0] - 1
         return context
 
-    def incremental_inference(self):
+    def incremental_inference(self, testing=True):
         """Context manager for incremental inference.
 
         This provides an optimized forward pass for incremental inference
@@ -267,32 +266,34 @@ class Decoder(nn.Module):
                 self.decoder = decoder
 
             def __enter__(self):
-                self.decoder._start_incremental_inference()
+                self.decoder._start_incremental_inference(testing)
 
             def __exit__(self, *args):
-                self.decoder._stop_incremental_inference()
+                self.decoder._stop_incremental_inference(testing)
 
         return IncrementalInference(self)
 
-    def _start_incremental_inference(self):
+    def _start_incremental_inference(self, testing=True):
         assert not self._is_inference_incremental, \
             'already performing incremental inference'
         self._is_inference_incremental = True
 
-        # save original forward and convolution layers
-        self._orig_forward = self.forward
-        self._orig_conv = self.convolutions
-
-        # switch to incremental forward
-        self.forward = self._incremental_forward
+        if testing:
+            # save original forward and convolution layers
+            self._orig_forward = self.forward
+            self._orig_conv = self.convolutions
+    
+            # switch to incremental forward
+            self.forward = self._incremental_forward
 
         # start a fresh sequence
         self.clear_incremental_state()
 
-    def _stop_incremental_inference(self):
+    def _stop_incremental_inference(self, testing):
         # restore original forward and convolution layers
-        self.forward = self._orig_forward
-        self.convolutions = self._orig_conv
+        if testing:
+            self.forward = self._orig_forward
+            self.convolutions = self._orig_conv
 
         self._is_inference_incremental = False
 

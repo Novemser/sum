@@ -156,7 +156,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         #greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
         #                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
         #                      enable_sample=False)
-        
+
         sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
                              enable_sample=True)
@@ -227,12 +227,11 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # 2) sampled
         if self.enable_rl:
             args = self.args
+            
             # Initialize generator
             models = [self.model] # SequenceGenerator accepts a list of models
-            self.generator = SequenceGenerator(models, self.dst_dict, beam_size=1,
-                                           stop_early=(not args.no_early_stop),
-                                           normalize_scores=(not args.unnormalized),
-                                           len_penalty=args.lenpen).cuda()
+            self.generator.models = models
+            
             # since deepcopy does not support our case, we do not use fast generation
             # cur_model = copy.deepcopy(self.model) # deep copy current model, since once made generation fast, cannot be trained
             # cur_model.make_generation_fast_(1, not args.no_beamable_mm) # for fast generation   
@@ -254,10 +253,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
             rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
             
-            # rouge_delta = rouge_greedy - rouge_sampled
+            #rouge_delta = rouge_greedy - rouge_sampled
             rouge_delta = -rouge_sampled
-            print(refs[0])
-            print(sampled_sums[0])
             
             rouge_delta =  rouge_delta.view(-1, 1)
             rouge_delta = rouge_delta.expand(seq_log_probs.size())
@@ -265,12 +262,13 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             seq_log_probs = seq_log_probs.contiguous().view(-1)
             rouge_delta = rouge_delta.contiguous().view(-1).cuda()
             
-            
             mask = torch.ne(sampled_hypos, self.dst_dict.pad()).float().cuda()
             mask = mask.contiguous().view(-1)
-            rl_loss = Variable(rouge_delta, requires_grad=False) * \
-                seq_log_probs * Variable(mask, requires_grad=False)
-            rl_loss = torch.sum(rl_loss) / torch.sum(mask)
+            sum_mask = torch.sum(mask)
+            if sum_mask == 0:
+                sum_mask = 1
+            rl_loss = torch.sum(Variable(rouge_delta, requires_grad=False) * \
+                seq_log_probs * Variable(mask, requires_grad=False)) / sum_mask
        
         else:
             rl_loss = mean_rouge_greedy = mean_rouge_sampled = mean_sum_log_prob = None
@@ -302,7 +300,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # flatten grads into a contiguous block of memory
         if self.flat_grads is None:
             self.flat_grads = self._flatten_grads_(self.model)
-
+            
+        
         # all-reduce grads
         nccl.all_reduce(self.flat_grads)
 
