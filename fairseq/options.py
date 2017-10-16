@@ -114,6 +114,8 @@ def add_generation_args(parser):
                        help='performs unk word replacement')
     group.add_argument('-enable_sample', action='store_true',
                       help='decode in sample mode')
+    group.add_argument('--minlen', default=1, type=int, metavar='N',
+                       help=('generate sequence of min length'))
 
     return group
 
