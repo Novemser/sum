@@ -238,7 +238,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         fmt = 'ref: {}\n'
         fmt += 'greedy: {}\n'
         fmt += 'sampled: {}'
-        #print(fmt.format(refs[0], greedy_sums[0], sampled_sums[0]))
+        print(fmt.format(refs[0], greedy_sums[0], sampled_sums[0]))
         if self.enable_rl:
             seq_lens = torch.Tensor([len(seq.split(' ')) for seq in sampled_sums]).cuda()
 
@@ -248,7 +248,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
             rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
             rouge_delta = rouge_greedy - rouge_sampled
-            #rouge_delta =  - rouge_sampled
+            # rouge_delta =  - rouge_sampled
             
             rl_loss = Variable(rouge_delta.cuda(), requires_grad=False) * sum_log_probs
             rl_loss = torch.sum(rl_loss) / torch.sum(Variable(seq_lens, requires_grad=False))
