@@ -95,8 +95,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.generator = SequenceGenerator(models, dst_dict, beam_size=1,
                                        stop_early=(not args.no_early_stop),
                                        normalize_scores=(not args.unnormalized),
-                                       len_penalty=args.lenpen, testing=False,
-                                       minlen=args.minlen).cuda()
+                                       len_penalty=args.lenpen,
+                                       minlen=args.minlen, testing=False).cuda()
 
         
 
@@ -157,12 +157,12 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
                              enable_sample=True)
-        greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
-                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
-                              enable_sample=True)
+        #greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+        #                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
+        #                      enable_sample=False)
         
         
-        # greedy_hypos = sampled_hypos
+        greedy_hypos = sampled_hypos
         ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
         for i, id in enumerate(self._sample['id']):
             src = input['src_tokens'].data[i, :]
@@ -247,8 +247,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             
             rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
             rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
-            rouge_delta = rouge_greedy - rouge_sampled
-            # rouge_delta =  - rouge_sampled
+            #rouge_delta = rouge_greedy - rouge_sampled
+            rouge_delta =  - rouge_sampled
             
             rl_loss = Variable(rouge_delta.cuda(), requires_grad=False) * sum_log_probs
             rl_loss = torch.sum(rl_loss) / torch.sum(Variable(seq_lens, requires_grad=False))

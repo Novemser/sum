@@ -52,7 +52,7 @@ class SequenceGenerator(object):
         return self
 
     def generate_batched_itr(self, data_itr, maxlen_a=0, maxlen_b=200,
-                             cuda_device=None, timer=None, enable_sample=None):
+                             cuda_device=None, timer=None):
         """Iterate over a batched dataset and yield individual translations.
 
         Args:
@@ -72,7 +72,7 @@ class SequenceGenerator(object):
             if timer is not None:
                 timer.start()
             hypos = self.generate(input['src_tokens'], input['src_positions'],
-                                  maxlen=(maxlen_a*srclen + maxlen_b), enable_sample=enable_sample)
+                                  maxlen=(maxlen_a*srclen + maxlen_b), enable_sample=self.enable_sample)
             if timer is not None:
                 timer.stop(s['ntokens'])
             for i, id in enumerate(s['id']):
@@ -83,9 +83,10 @@ class SequenceGenerator(object):
 
     def generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, enable_sample=None):
         """Generate a batch of translations."""
+        enable_sample = self.enable_sample if enable_sample is None else enable_sample
         with ExitStack() as stack:
             for model in self.models:
-                stack.enter_context(model.decoder.incremental_inference())
+                stack.enter_context(model.decoder.incremental_inference(self.testing))
             return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample)
 
     def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, enable_sample=None):
@@ -95,7 +96,7 @@ class SequenceGenerator(object):
         beam_size = beam_size if beam_size is not None else self.beam_size
         maxlen = min(maxlen, self.maxlen) if maxlen is not None else self.maxlen
 
-        if enable_sample:
+        if self.testing:
             assert beam_size == 1
         encoder_outs = []
         for model in self.models:
@@ -340,7 +341,11 @@ class SequenceGenerator(object):
         avg_probs = None
         avg_attn = None
         for model, encoder_out in zip(self.models, encoder_outs):
-            decoder_out, attn = model.decoder(tokens, positions, encoder_out, testing=self.testing)
+            if self.testing:
+                decoder_out, attn = model.decoder(tokens, positions, encoder_out, testing=self.testing)
+            else:
+                decoder_out, attn = model.decoder._incremental_forward(tokens, positions, 
+                                                               encoder_out, testing=self.testing)
             probs = F.softmax(decoder_out[:, -1, :])
             attn = attn[:, -1, :].data
             if avg_probs is None or avg_attn is None:
