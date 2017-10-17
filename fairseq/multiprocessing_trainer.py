@@ -157,12 +157,12 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
                              enable_sample=True)
-        #greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
-        #                      maxlen=(args.max_len_a*srclen + args.max_len_b), 
-        #                      enable_sample=False)
+        greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                              enable_sample=False)
         
         
-        greedy_hypos = sampled_hypos
+        #greedy_hypos = sampled_hypos
         ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
         for i, id in enumerate(self._sample['id']):
             src = input['src_tokens'].data[i, :]
@@ -221,25 +221,26 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # If enable_rl, generate two outputs in inference model
         # 1) greedy
         # 2) sampled
-        args = self.args
-        # Initialize generator
-        models = [self.model] # SequenceGenerator accepts a list of models
-        self.generator.models = models
-        # since deepcopy does not support our case, we do not use fast generation
-        # cur_model = copy.deepcopy(self.model) # deep copy current model, since once made generation fast, cannot be trained
-        # cur_model.make_generation_fast_(1, not args.no_beamable_mm) # for fast generation   
-        input = self._sample['net_input']
         
-        ref_hypo_res = self.generate(input)
-        refs = [item[0] for item in ref_hypo_res]
-        greedy_sums = [item[1] for item in ref_hypo_res]
-        sampled_sums = [item[2] for item in ref_hypo_res]
-        sum_log_probs = [item[3] for item in ref_hypo_res]
-        fmt = 'ref: {}\n'
-        fmt += 'greedy: {}\n'
-        fmt += 'sampled: {}'
-        print(fmt.format(refs[0], greedy_sums[0], sampled_sums[0]))
         if self.enable_rl:
+            args = self.args
+            # Initialize generator
+            models = [self.model] # SequenceGenerator accepts a list of models
+            self.generator.models = models
+            # since deepcopy does not support our case, we do not use fast generation
+            # cur_model = copy.deepcopy(self.model) # deep copy current model, since once made generation fast, cannot be trained
+            # cur_model.make_generation_fast_(1, not args.no_beamable_mm) # for fast generation   
+            input = self._sample['net_input']
+            
+            ref_hypo_res = self.generate(input)
+            refs = [item[0] for item in ref_hypo_res]
+            greedy_sums = [item[1] for item in ref_hypo_res]
+            sampled_sums = [item[2] for item in ref_hypo_res]
+            sum_log_probs = [item[3] for item in ref_hypo_res]
+            fmt = 'ref: {}\n'
+            fmt += 'greedy: {}\n'
+            fmt += 'sampled: {}'
+            print(fmt.format(refs[0], greedy_sums[0], sampled_sums[0]))
             seq_lens = torch.Tensor([len(seq.split(' ')) for seq in sampled_sums]).cuda()
 
             sum_log_probs = torch.cat(sum_log_probs)
@@ -247,8 +248,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             
             rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
             rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
-            #rouge_delta = rouge_greedy - rouge_sampled
-            rouge_delta =  - rouge_sampled
+            rouge_delta = rouge_greedy - rouge_sampled
+            #rouge_delta =  - rouge_sampled
             
             rl_loss = Variable(rouge_delta.cuda(), requires_grad=False) * sum_log_probs
             rl_loss = torch.sum(rl_loss) / torch.sum(Variable(seq_lens, requires_grad=False))

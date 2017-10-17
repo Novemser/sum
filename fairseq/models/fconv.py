@@ -330,6 +330,7 @@ class Decoder(nn.Module):
         for proj, conv, attention in zip(self.projections, self.convolutions, self.attention):
             residual = x if proj is None else proj(x)
             x = conv.incremental_forward(x, testing)
+            #print(x.size())
             x = F.glu(x)
 
             # attention
@@ -463,7 +464,7 @@ def parse_arch(args):
         args.encoder_embed_dim = 256
         args.encoder_layers = '[(256, 3)] * 6'
         args.decoder_embed_dim = 256
-        args.decoder_layers = '[(256, 1)] * 6'
+        args.decoder_layers = '[(256, 3)] * 6'
         args.decoder_out_embed_dim = 256 
     elif args.arch == 'fconv_giga_large':
         args.encoder_embed_dim = 512
