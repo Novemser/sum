@@ -96,7 +96,7 @@ class SequenceGenerator(object):
         beam_size = beam_size if beam_size is not None else self.beam_size
         maxlen = min(maxlen, self.maxlen) if maxlen is not None else self.maxlen
 
-        if self.testing:
+        if not self.testing:
             assert beam_size == 1
         encoder_outs = []
         for model in self.models:

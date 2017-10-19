@@ -201,7 +201,7 @@ def evaluate(hypotheses, references, metric='rouge_l/f_score'):
     reference: []
     """
     scores = rouge(hypotheses, references)
-    return scores[metric].item()
+    return scores[metric].item()*100
 
 def sum_if_not_none(x):
     """

@@ -129,8 +129,7 @@ def main():
             gen_timer = StopwatchMeter()
             translations = translator.generate_batched_itr(
                 t, maxlen_a=args.max_len_a, maxlen_b=args.max_len_b,
-                cuda_device=0 if use_cuda else None, timer=gen_timer,
-                enable_sample=args.enable_sample)
+                cuda_device=0 if use_cuda else None, timer=gen_timer)
             for id, src, ref, hypos in translations:
                 ref = ref.int().cpu()
                 top_hypo = hypos[0]['tokens'].int().cpu()

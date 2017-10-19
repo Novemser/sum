@@ -131,6 +131,8 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
     wps_meter = TimeMeter()       # words per second
     clip_meter = AverageMeter()   # % of updates clipped
     gnorm_meter = AverageMeter()  # gradient norm
+    grg_meter = AverageMeter()    # greedy rouge
+    srg_meter = AverageMeter()    # sampled rouge
 
     desc = '| epoch {:03d}'.format(epoch)
     lr = trainer.get_lr()
@@ -156,6 +158,8 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
             wps_meter.update(ntokens)
             clip_meter.update(1 if grad_norm > args.clip_norm else 0)
             gnorm_meter.update(grad_norm)
+            grg_meter.update(mean_rouge_greedy)
+            srg_meter.update(mean_rouge_sampled)
 
             t.set_postfix(collections.OrderedDict([
                 ('loss', '{:.2f} ({:.2f})'.format(ml_loss, loss_meter.avg)),
@@ -165,6 +169,8 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
                 ('lr', lr),
                 ('clip', '{:3.0f}%'.format(clip_meter.avg * 100)),
                 ('gnorm', '{:.4f}'.format(gnorm_meter.avg)),
+                ('grg', '{:.2f}'.format(grg_meter.avg)),
+                ('srg', '{:.2f}'.format(srg_meter.avg)),
             ]))
             
             if args.enable_rl:
@@ -193,7 +199,9 @@ def train(args, epoch, batch_offset, trainer, criterion, dataset, num_gpus):
                            round(wpb_meter.avg),
                            round(bsz_meter.avg),
                            lr, clip_meter.avg * 100,
-                           gnorm_meter.avg))
+                           gnorm_meter.avg,
+                           grg_meter.avg,
+                           srg_meter.avg))
 
 
 def validate(args, epoch, trainer, criterion, dataset, subset, ngpus):

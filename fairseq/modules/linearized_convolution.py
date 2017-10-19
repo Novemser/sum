@@ -23,7 +23,8 @@ class LinearizedConvolution(ConvTBC):
         self.clear_buffer()
 
         self._linearized_weight = None
-        self.register_backward_hook(self._clear_linearized_weight)
+        #self.register_backward_hook(self._clear_linearized_weight)
+        ## TODO: check if this can be commented
 
     def remove_future_timesteps(self, x):
         """Remove future time steps created by padding."""
@@ -74,6 +75,10 @@ class LinearizedConvolution(ConvTBC):
         else:
             output = F.linear(self.input_buffer.view(bsz, -1), weight, self.bias)
         '''
+        kw = self.kernel_size[0]
+        weight = self.weight.transpose(2, 1).transpose(1, 0).contiguous()
+        assert weight.size() == (self.out_channels, kw, self.in_channels)
+        weight = weight.view(self.out_channels, -1)
         output = F.linear(self.input_buffer.view(bsz, -1), weight, self.bias)
         return output.view(bsz, 1, -1)
 

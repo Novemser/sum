@@ -181,7 +181,10 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
                                                                  self.src_dict, self.dst_dict)
             #print('----------')
             #print('ref: {}\n greedy_hypo: {}\n sampled_hypo: {}'.format(ref_str, greedy_hypo_str, sampled_hypo_str))
-            ref_hypo_res.append((ref_str, greedy_hypo_str[0], sampled_hypo_str[0], _sum_log_probs[0])) # beam_size = 1
+            ref_hypo_res.append((ref_str, greedy_hypo_str[0], 
+                                 sampled_hypo_str[0], 
+                                 _sum_log_probs[0],
+                                 sampled_hypo[0]['tokens'])) # beam_size = 1
         
         return ref_hypo_res
         
@@ -237,12 +240,12 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             greedy_sums = [item[1] for item in ref_hypo_res]
             sampled_sums = [item[2] for item in ref_hypo_res]
             sum_log_probs = [item[3] for item in ref_hypo_res]
+            sampled_tokens = [item[4]for item in ref_hypo_res]
             fmt = 'ref: {}\n'
             fmt += 'greedy: {}\n'
             fmt += 'sampled: {}'
             print(fmt.format(refs[0], greedy_sums[0], sampled_sums[0]))
-            seq_lens = torch.Tensor([len(seq.split(' ')) for seq in sampled_sums]).cuda()
-
+            seq_lens = torch.Tensor([seq.size()[0] for seq in sampled_tokens]).cuda()
             sum_log_probs = torch.cat(sum_log_probs)
             
             
