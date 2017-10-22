@@ -71,6 +71,13 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         """Initialize child processes."""
         self.args = args
 
+        # copy src and dst dictionary
+        self.src_dict = src_dict
+        self.dst_dict = dst_dict
+
+        # copy enable rl
+        self.enable_rl = args.enable_rl
+
         # set CUDA device
         torch.cuda.set_device(device_id)
 
@@ -86,12 +93,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.flat_grads = None
         self.loss = None
 
-        # copy src and dst dictionary
-        self.src_dict = src_dict
-        self.dst_dict = dst_dict
-
-        # copy enable rl
-        self.enable_rl = args.enable_rl
+        if self.enable_rl:
+            self.rl_loss = None
 
         # initialize LR scheduler
         self.lr_scheduler = self._build_lr_scheduler()
@@ -180,8 +183,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         Generate greedy and sampled outputs
         """
         def lstrip_pad(tensor):
-            pad = self.generator.pad
-            return tensor[tensor.eq(pad).sum():]
+            return tensor[tensor.eq(self.generator.pad).sum():]
         
         args = self.args
         srclen = input['src_tokens'].size(1)
@@ -203,13 +205,12 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             sampled_hypo = sampled_hypos[i]
             
             ref = ref.int().cpu()
+
             # we don't need sum_log_probs for greedy output
-            ref_str, greedy_hypo_str, _ = utils.display_hypotheses(id, src, None, ref, 
-                                                                 greedy_hypo[:min(len(greedy_hypo), args.nbest)],
-                                                                 self.src_dict, self.dst_dict)
-            _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, src, None, ref, 
-                                                                 sampled_hypo[:min(len(sampled_hypo), args.nbest)],
-                                                                 self.src_dict, self.dst_dict)
+            ref_str, greedy_hypo_str, _ = utils.display_hypotheses(id, ref, greedy_hypo[:min(len(greedy_hypo), args.nbest)], 
+                self.src_dict, self.dst_dict, args=self.args)
+            _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, ref, sampled_hypo[:min(len(sampled_hypo), args.nbest)], 
+                self.src_dict, self.dst_dict, args=self.args)
             #print('----------')
             #print('ref: {}\n greedy_hypo: {}\n sampled_hypo: {}'.format(ref_str, greedy_hypo_str, sampled_hypo_str))
             ref_hypo_res.append((ref_str, greedy_hypo_str[0], 
@@ -248,6 +249,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         logging_output = self.criterion.__class__.aggregate_logging_outputs(logging_outputs)
         logging_output['gnorm'] = grad_norms[0]  # log the gradient norm
 
+        ## TODO: add more logging info such as rl loss,etc.
         return logging_output
 
     def _async_forward(self, rank, device_id, eval=False):
@@ -263,6 +265,46 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         # calculate loss and sample size
         self.loss, sample_size, logging_output = self.criterion(self.model, self._sample)
 
+        if not eval and self.enable_rl:
+            args = self.args
+            # update generator
+            models = [self.model] # SequenceGenerator accepts a list of models
+            self.generator.models = models ## TODO: may be not necessary to copy...
+            input = self._sample['net_input']
+            
+            ref_hypo_res = self.generate(input)
+            refs = [item[0] for item in ref_hypo_res]
+            greedy_sums = [item[1] for item in ref_hypo_res]
+            sampled_sums = [item[2] for item in ref_hypo_res]
+            sum_log_probs = [item[3] for item in ref_hypo_res]
+            sampled_tokens = [item[4]for item in ref_hypo_res]
+            fmt = 'ref: {}\n'
+            fmt += 'greedy: {}\n'
+            fmt += 'sampled: {}'
+            print(fmt.format(refs[0], greedy_sums[0], sampled_sums[0]))
+            seq_lens = torch.Tensor([seq.size()[0] for seq in sampled_tokens]).cuda()
+            sum_log_probs = torch.cat(sum_log_probs)
+            
+            # evaluate rouge
+            rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
+            rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
+            rouge_delta = rouge_greedy - rouge_sampled
+            #rouge_delta =  - rouge_sampled
+            
+            # compute rl loss
+            rl_loss = Variable(rouge_delta.cuda(), requires_grad=False) * sum_log_probs
+            self.rl_loss = torch.sum(rl_loss) / torch.sum(Variable(seq_lens, requires_grad=False))
+
+            # compute hybrid loss
+            ml_loss = self.loss
+            self.loss = args.loss_scale * self.rl_loss + (1 - args.loss_scale) * ml_loss
+
+            # compute mean statistics
+            mean_rouge_greedy = sum(rouge_greedy)/len(rouge_greedy)
+            mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
+            mean_sum_log_prob = torch.sum(sum_log_probs)/torch.sum(Variable(seq_lens, requires_grad=False))
+            mean_sum_log_prob = mean_sum_log_prob.data[0]
+            print(mean_rouge_greedy, mean_rouge_sampled, mean_sum_log_prob)
         return sample_size, logging_output
 
     def _async_backward_and_opt(self, rank, device_id, grad_denom):
@@ -289,6 +331,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         # reset loss
         self.loss = None
+        if self.enable_rl:
+            self.rl_loss = None
 
         return grad_norm
 
