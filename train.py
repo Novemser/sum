@@ -32,9 +32,14 @@ def main():
     options.add_optimization_args(parser)
     options.add_checkpoint_args(parser)
     options.add_model_args(parser)
+    options.add_generation_args(parser) # should specify generation parameters!!
 
     args = utils.parse_args_and_arch(parser)
     print(args)
+    
+    # specify visible devices
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.cuda_visible_devices
+    print('CUDA_VISIBLE_DEVICES: {}\n'.format(args.cuda_visible_devices))
 
     if args.no_progress_bar:
         progress_bar.enabled = False

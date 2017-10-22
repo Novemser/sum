@@ -7,6 +7,7 @@
 # can be found in the PATENTS file in the same directory.
 #
 
+import os
 import sys
 import torch
 from torch.autograd import Variable
@@ -32,6 +33,10 @@ def main():
 
     args = parser.parse_args()
     print(args)
+    
+    # specify visible devices
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.cuda_visible_devices
+    print('CUDA_VISIBLE_DEVICES: {}\n'.format(args.cuda_visible_devices))
 
     if args.no_progress_bar:
         progress_bar.enabled = False

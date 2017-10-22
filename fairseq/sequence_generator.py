@@ -92,6 +92,10 @@ class SequenceGenerator(object):
 
     def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, enable_sample=None):
         enable_sample = self.enable_sample if not enable_sample else enable_sample
+        # the max beam size is the dictionary size - 1, since we never select pad
+        beam_size = beam_size if beam_size is not None else self.beam_size
+        beam_size = min(beam_size, self.vocab_size - 1)
+        
         if enable_sample:
             assert beam_size == 1, 'in sample mode, beam_size must be 1'
         bsz = src_tokens.size(0)
@@ -185,7 +189,8 @@ class SequenceGenerator(object):
             """
             assert bbsz_idx.numel() == scores.numel()
             sum_log_probs = scores
-            scores = scores.data
+            if enable_sample:
+                scores = scores.data
             norm_scores = scores/math.pow(step+1, self.len_penalty) if self.normalize_scores else scores
             sents_seen = set()
             for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs):
@@ -256,7 +261,7 @@ class SequenceGenerator(object):
                 probs_[:, self.pad] = -math.inf
 
             # Record attention scores
-            attn[:, :, step+1].copy_(avg_attn_scores)
+            attn[:, :, step+1].copy_(avg_attn_scores.data)
 
             # take the best 2 x beam_size predictions. We'll choose the first
             # beam_size of these which don't predict eos to continue with.

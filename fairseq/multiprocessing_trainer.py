@@ -67,7 +67,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         self._grads_initialized = False
 
-    def _async_init(self, rank, device_id, args, model, criterion, nccl_uid, src_dict=None, dst_dict=Non):
+    def _async_init(self, rank, device_id, args, model, criterion, nccl_uid, src_dict=None, dst_dict=None):
         """Initialize child processes."""
         self.args = args
 
@@ -186,7 +186,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         args = self.args
         srclen = input['src_tokens'].size(1)
         sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
-                             maxlen=(args.max_len_a*srclen  args.max_len_b), 
+                             maxlen=(args.max_len_a*srclen + args.max_len_b), 
                              enable_sample=True)
         greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
                               maxlen=(args.max_len_a*srclen + args.max_len_b), 

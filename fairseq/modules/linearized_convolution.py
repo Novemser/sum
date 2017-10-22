@@ -66,15 +66,21 @@ class LinearizedConvolution(ConvTBC):
             output = F.linear(input.view(bsz, -1), weight, self.bias)
             return output.view(bsz, 1, -1)
         else:
+            # reshape weight
+            weight = self._get_linearized_weight()
             if kw > 1:
+                input = input.data
                 if self.input_buffer is None:
-                    self.input_buffer = torch.autograd.Variable(input.data.new(bsz, kw, input.size(2)))
-                    self.input_buffer.data.zero_()
+                    self.input_buffer = input.new(bsz, kw, input.size(2))
+                    self.input_buffer.zero_()
                 else:
                     # shift buffer
                     self.input_buffer[:, :-1, :] = self.input_buffer[:, 1:, :].clone()
                 # append next input
-                self.input_buffer[:, -1, :] = input[:, -1, :].clone()
+                self.input_buffer[:, -1, :] = input[:, -1, :]
+                input = torch.autograd.Variable(self.input_buffer, volatile=True)
+            output = F.linear(input.view(bsz, -1), weight, self.bias)
+            return output.view(bsz, 1, -1)
             '''
             self.input_buffer = self.input_buffer.transpose(0, 1) # kw * bsz * dim
             output = self.forward(self.input_buffer)
@@ -82,8 +88,7 @@ class LinearizedConvolution(ConvTBC):
             output = output.view(bsz, -1)
             self.input_buffer = self.input_buffer.transpose(0, 1)
             '''
-            output = F.linear(self.input_buffer.view(bsz, -1), weight, self.bias) ## TODO: use ordinary forward
-            return output.view(bsz, 1, -1)
+            ## TODO: use ordinary forward
 
 
     def clear_buffer(self):
