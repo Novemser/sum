@@ -163,7 +163,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     def _async_load_checkpoint(self, rank, device_id, filename):
         extra_state, self._optim_history = utils.load_state(
             filename, self.model, self.criterion, self.optimizer,
-            self.lr_scheduler, cuda_device=device_id)
+            self.lr_scheduler, args=self.args, cuda_device=device_id)
         return extra_state
 
     def set_seed(self, seed):

@@ -261,8 +261,10 @@ class SequenceGenerator(object):
                 probs_[:, self.pad] = -math.inf
 
             # Record attention scores
-            attn[:, :, step+1].copy_(avg_attn_scores.data)
-
+            if enable_sample:
+                attn[:, :, step+1].copy_(avg_attn_scores.data)
+            else:
+                attn[:, :, step+1].copy_(avg_attn_scores)
             # take the best 2 x beam_size predictions. We'll choose the first
             # beam_size of these which don't predict eos to continue with.
             cand_scores = buffer('cand_scores', type_of=attn) # attn has the same type as scores.data
