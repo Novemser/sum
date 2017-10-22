@@ -50,7 +50,7 @@ def add_optimization_args(parser):
                        help='optimizer ({})'.format(', '.join(MultiprocessingTrainer.OPTIMIZERS)))
     group.add_argument('--lr', '--learning-rate', default=0.25, type=float, metavar='LR',
                        help='initial learning rate')
-    group.add_argument('--min-lr', metavar='LR', default=1e-5, type=float,
+    group.add_argument('--min-lr', metavar='LR', default=1e-6, type=float,
                        help='minimum learning rate')
     group.add_argument('--force-anneal', '--fa', default=0, type=int, metavar='N',
                        help='force annealing at specified epoch')

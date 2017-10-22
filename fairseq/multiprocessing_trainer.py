@@ -135,7 +135,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             lr_scheduler.best = None
         else:
             # decay the LR by 0.1 every time the validation loss plateaus
-            lr_scheduler = ReduceLROnPlateau(self.optimizer, patience=0)
+            lr_scheduler = ReduceLROnPlateau(self.optimizer, patience=0, factor=self.args.lrshrink)
         return lr_scheduler
 
     def get_model(self):
@@ -326,8 +326,6 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             # compute hybrid loss
             ml_loss = self.loss
             self.loss = args.loss_scale * self.rl_loss + (1 - args.loss_scale) * ml_loss
-            
-            print(mean_rouge_greedy, mean_rouge_sampled, mean_sum_log_prob)
         return sample_size, logging_output
 
     def _async_backward_and_opt(self, rank, device_id, grad_denom):

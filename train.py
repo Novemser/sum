@@ -139,6 +139,7 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
     grg_meter = AverageMeter()    # greedy rouge
     srg_meter = AverageMeter()    # sampled rouge
     slp_meter = AverageMeter()    # sum log probability
+    gn_meter = AverageMeter()     # gnorm
     extra_meters = collections.defaultdict(lambda: AverageMeter())
 
     desc = '| epoch {:03d}'.format(epoch)
@@ -175,9 +176,10 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
                 ('bsz', '{:5d}'.format(round(bsz_meter.avg))),
                 ('lr', lr),
                 ('clip', '{:3.0f}%'.format(clip_meter.avg * 100)),
-                ('grg', '{:.4f}'.format(grg_meter.avg)),
-                ('srg', '{:.4f}'.format(srg_meter.avg)),
-                ('slp', '{:.2f}'.format(slp_meter.avg)),
+                ('gnorm', '{:.4f}'.format(logging_dict['gnorm'])),
+                ('grg', '{:.4f} ({:.4f})'.format(logging_dict['mean_rouge_greedy'], grg_meter.avg)),
+                ('srg', '{:.4f} ({:.4f})'.format(logging_dict['mean_rouge_sampled'], srg_meter.avg)),
+                ('slp', '{:.2f} ({:.2f})'.format(logging_dict['mean_sum_log_prob'], slp_meter.avg)),
             ] + extra_postfix), refresh=False)
 
             if i == 0:
@@ -190,9 +192,9 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
             loss_meter.avg, get_perplexity(loss_meter.avg))
         fmt += ' | s/checkpoint {:7d} | words/s {:6d} | words/batch {:6d}'.format(
             round(wps_meter.elapsed_time), round(wps_meter.avg), round(wpb_meter.avg))
-        fmt += ' | bsz {:5d} | lr {:0.6f} | clip {:3.0f}%'.format(
-            round(bsz_meter.avg), lr, clip_meter.avg * 100)
-        fmt += '| grg {:4f} | srg {:4f} | slp {:2f}'.format(
+        fmt += ' | bsz {:5d} | lr {:0.6f} | clip {:3.0f}% | gnorm {:.4f}'.format(
+            round(bsz_meter.avg), lr, clip_meter.avg * 100, gn_meter.avg)
+        fmt += '| grg {:.4f} | srg {:.4f} | slp {:.2f}'.format(
             grg_meter.avg, srg_meter.avg, slp_meter.avg)
         fmt += ''.join(
             ' | {} {:.4f}'.format(k, meter.avg)
@@ -265,7 +267,7 @@ def validate(args, epoch, trainer, dataset, subset, ngpus):
         val_loss = loss_meter.avg
         fmt = desc + ' | valid loss {:2.2f} | valid ppl {:3.2f}'.format(
             val_loss, get_perplexity(val_loss))
-        fmt += '| grg {:4f} | srg {:4f} | slp {:2f}'.format(
+        fmt += '| grg {:.4f} | srg {:.4f} | slp {:.2f}'.format(
             grg_meter.avg, srg_meter.avg, slp_meter.avg)
         fmt += ''.join(
             ' | {} {:.4f}'.format(k, meter.avg)

@@ -11,6 +11,7 @@ import torch.nn.functional as F
 
 from .fairseq_criterion import FairseqCriterion
 
+from .utils import aggregate
 
 class CrossEntropyCriterion(FairseqCriterion):
 
