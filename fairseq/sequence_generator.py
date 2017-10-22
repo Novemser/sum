@@ -238,7 +238,7 @@ class SequenceGenerator(object):
             # reorder decoder internal states based on the prev choice of beams
             if reorder_state is not None:
                 for model in self.models:
-                    model.decoder.reorder_incremental_state(reorder_state)
+                    model.decoder.reorder_incremental_state(reorder_state, enable_sample) # enable_bp = enable_sample
 
             probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs, enable_sample=enable_sample)
             if enable_sample:

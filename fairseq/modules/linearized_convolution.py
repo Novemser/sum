@@ -67,19 +67,22 @@ class LinearizedConvolution(ConvTBC):
             return output.view(bsz, 1, -1)
         else:
             # reshape weight
-            weight = self._get_linearized_weight()
+            weight = self.weight.transpose(2, 1).transpose(1, 0).contiguous()
+            assert weight.size() == (self.out_channels, kw, self.in_channels)
+            weight = weight.view(self.out_channels, -1)
+            
             if kw > 1:
-                input = input.data
                 if self.input_buffer is None:
-                    self.input_buffer = input.new(bsz, kw, input.size(2))
+                    self.input_buffer = input.data.new(bsz, kw, input.size(2))
                     self.input_buffer.zero_()
+                    self.input_buffer = torch.autograd.Variable(self.input_buffer)
                 else:
                     # shift buffer
-                    self.input_buffer[:, :-1, :] = self.input_buffer[:, 1:, :].clone()
+                    _next_buffer = self.input_buffer[:, 1:, :].clone()
+                    self.input_buffer[:, :-1, :] = _next_buffer
                 # append next input
-                self.input_buffer[:, -1, :] = input[:, -1, :]
-                input = torch.autograd.Variable(self.input_buffer, volatile=True)
-            output = F.linear(input.view(bsz, -1), weight, self.bias)
+                self.input_buffer[:, -1, :] = input[:, -1, :].clone()
+            output = F.linear(self.input_buffer.view(bsz, -1), weight, self.bias)
             return output.view(bsz, 1, -1)
             '''
             self.input_buffer = self.input_buffer.transpose(0, 1) # kw * bsz * dim
@@ -94,9 +97,15 @@ class LinearizedConvolution(ConvTBC):
     def clear_buffer(self):
         self.input_buffer = None
 
-    def reorder_buffer(self, new_order):
+    def reorder_buffer(self, new_order, enable_bp=False):
         if self.input_buffer is not None:
-            self.input_buffer = self.input_buffer.index_select(0, new_order)
+            if not enable_bp:
+                self.input_buffer = self.input_buffer.index_select(0, new_order)
+            else:
+                self.input_buffer = torch.index_select(self.input_buffer, 
+                                                       0, 
+                                                       torch.autograd.Variable(new_order, requires_grad=False))
+
 
     def _get_linearized_weight(self):
         if self._linearized_weight is None:

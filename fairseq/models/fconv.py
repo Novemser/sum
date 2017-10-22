@@ -386,7 +386,7 @@ class Decoder(nn.Module):
                 if isinstance(attn.bmm, BeamableMM):
                     attn.bmm.set_beam_size(beam_size)
 
-    def reorder_incremental_state(self, new_order):
+    def reorder_incremental_state(self, new_order, enable_bp=False):
         """Reorder buffered internal state (for incremental generation).
 
         **For incremental inference only**
@@ -397,7 +397,7 @@ class Decoder(nn.Module):
         """
         if self._is_inference_incremental:
             for conv in self.convolutions:
-                conv.reorder_buffer(new_order)
+                conv.reorder_buffer(new_order, enable_bp=enable_bp)
 
     def _use_beamable_mm(self):
         """Replace torch.bmm with BeamableMM in attention layers."""
