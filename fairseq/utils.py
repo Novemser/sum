@@ -227,3 +227,4 @@ def display_hypotheses(id, ref, hypos, src_dict, dst_dict, args=None):
             sum_log_probs.append(hypo['sum_log_prob'])
         return ref_str, hypo_str, sum_log_probs
             
+

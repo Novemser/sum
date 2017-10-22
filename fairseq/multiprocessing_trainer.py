@@ -252,6 +252,44 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         ## TODO: add more logging info such as rl loss,etc.
         return logging_output
 
+    def _generate_evaluate(self):
+        # update generator
+        models = [self.model] # SequenceGenerator accepts a list of models
+        self.generator.models = models ## TODO: may be not necessary to copy...
+        input = self._sample['net_input']
+        
+        # generate
+        ref_hypo_res = self.generate(input)
+        refs = [item[0] for item in ref_hypo_res]
+        greedy_sums = [item[1] for item in ref_hypo_res]
+        sampled_sums = [item[2] for item in ref_hypo_res]
+        sum_log_probs = [item[3] for item in ref_hypo_res]
+        sampled_tokens = [item[4]for item in ref_hypo_res]
+
+        # evaluate rouge
+        rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
+        rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
+
+        # compute mean rouge
+        mean_rouge_greedy = sum(rouge_greedy)/len(rouge_greedy)
+        mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
+
+        # compute mean sum log probability
+        seq_lens = torch.Tensor([seq.size()[0] for seq in sampled_tokens]).cuda()
+        sum_log_probs = torch.cat(sum_log_probs)
+        mean_sum_log_prob = torch.sum(sum_log_probs)/torch.sum(Variable(seq_lens, requires_grad=False))
+        mean_sum_log_prob = mean_sum_log_prob.data[0]
+
+        generation_output = {
+            'mean_rouge_greedy': mean_rouge_greedy,
+            'mean_rouge_sampled': mean_rouge_sampled,
+            'mean_sum_log_prob': mean_sum_log_prob,
+            'ex_refs': refs[0], # example for display
+            'ex_greedy_sums': greedy_sums[0],
+            'ex_sampled_sums': sampled_sums[0]
+        }
+        return rouge_greedy, rouge_sampled, sum_log_probs, seq_lens, generation_output
+
     def _async_forward(self, rank, device_id, eval=False):
         if eval:
             self.model.eval()
@@ -263,31 +301,21 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             return 0, {}
 
         # calculate loss and sample size
-        self.loss, sample_size, logging_output = self.criterion(self.model, self._sample)
+        self.loss, sample_size, logging_output = self.criterion(self.model, self._sample) # logging_output: loss, sample_size
+        args = self.args
+
+        if eval or (not eval and self.enable_rl):
+            rouge_greedy, rouge_sampled, sum_log_probs, seq_lens, generation_output = self._generate_evaluate()
+            logging_output = {**logging_output, **generation_output} # merge outputs
 
         if not eval and self.enable_rl:
-            args = self.args
-            # update generator
-            models = [self.model] # SequenceGenerator accepts a list of models
-            self.generator.models = models ## TODO: may be not necessary to copy...
-            input = self._sample['net_input']
-            
-            ref_hypo_res = self.generate(input)
-            refs = [item[0] for item in ref_hypo_res]
-            greedy_sums = [item[1] for item in ref_hypo_res]
-            sampled_sums = [item[2] for item in ref_hypo_res]
-            sum_log_probs = [item[3] for item in ref_hypo_res]
-            sampled_tokens = [item[4]for item in ref_hypo_res]
             fmt = 'ref: {}\n'
             fmt += 'greedy: {}\n'
             fmt += 'sampled: {}'
-            print(fmt.format(refs[0], greedy_sums[0], sampled_sums[0]))
-            seq_lens = torch.Tensor([seq.size()[0] for seq in sampled_tokens]).cuda()
-            sum_log_probs = torch.cat(sum_log_probs)
+            print(fmt.format(generation_output['ex_refs'], 
+                generation_output['ex_greedy_sums'], 
+                generation_output['ex_sampled_sums']))
             
-            # evaluate rouge
-            rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
-            rouge_sampled = torch.Tensor([utils.evaluate([sampled_sums[i]], [refs[i]]) for i in range(len(refs))])
             rouge_delta = rouge_greedy - rouge_sampled
             #rouge_delta =  - rouge_sampled
             
@@ -298,12 +326,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             # compute hybrid loss
             ml_loss = self.loss
             self.loss = args.loss_scale * self.rl_loss + (1 - args.loss_scale) * ml_loss
-
-            # compute mean statistics
-            mean_rouge_greedy = sum(rouge_greedy)/len(rouge_greedy)
-            mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
-            mean_sum_log_prob = torch.sum(sum_log_probs)/torch.sum(Variable(seq_lens, requires_grad=False))
-            mean_sum_log_prob = mean_sum_log_prob.data[0]
+            
             print(mean_rouge_greedy, mean_rouge_sampled, mean_sum_log_prob)
         return sample_size, logging_output
 

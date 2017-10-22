@@ -136,6 +136,9 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
     wpb_meter = AverageMeter()    # words per batch
     wps_meter = TimeMeter()       # words per second
     clip_meter = AverageMeter()   # % of updates clipped
+    grg_meter = AverageMeter()    # greedy rouge
+    srg_meter = AverageMeter()    # sampled rouge
+    slp_meter = AverageMeter()    # sum log probability
     extra_meters = collections.defaultdict(lambda: AverageMeter())
 
     desc = '| epoch {:03d}'.format(epoch)
@@ -143,9 +146,8 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
     lr = trainer.get_lr()
     with progress_bar(itr, desc, leave=False) as t:
         for i, sample in data.skip_group_enumerator(t, num_gpus, batch_offset):
-            loss_dict = trainer.train_step(sample)
-            loss = loss_dict['loss']
-            del loss_dict['loss']  # don't include in extra_meters or extra_postfix
+            logging_dict = trainer.train_step(sample)
+            loss = logging_dict['loss']
 
             ntokens = sum(s['ntokens'] for s in sample)
             src_size = sum(s['src_tokens'].size(0) for s in sample)
@@ -153,13 +155,19 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
             bsz_meter.update(src_size)
             wpb_meter.update(ntokens)
             wps_meter.update(ntokens)
-            clip_meter.update(1 if loss_dict['gnorm'] > args.clip_norm else 0)
+            clip_meter.update(1 if logging_dict['gnorm'] > args.clip_norm else 0)
+            grg_meter.update(logging_dict['mean_rouge_greedy'])
+            srg_meter.update(logging_dict['mean_rouge_sampled'])
+            slp_meter.update(logging_dict['mean_sum_log_prob'])
+
+            del logging_dict['loss']  # don't include in extra_meters or extra_postfix
 
             extra_postfix = []
-            for k, v in loss_dict.items():
+            '''
+            for k, v in logging_dict.items():
                 extra_meters[k].update(v)
                 extra_postfix.append((k, '{:.4f}'.format(extra_meters[k].avg)))
-
+            '''
             t.set_postfix(collections.OrderedDict([
                 ('loss', '{:.2f} ({:.2f})'.format(loss, loss_meter.avg)),
                 ('wps', '{:5d}'.format(round(wps_meter.avg))),
@@ -167,6 +175,9 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
                 ('bsz', '{:5d}'.format(round(bsz_meter.avg))),
                 ('lr', lr),
                 ('clip', '{:3.0f}%'.format(clip_meter.avg * 100)),
+                ('grg', '{:.4f}'.format(grg_meter.avg)),
+                ('srg', '{:.4f}'.format(srg_meter.avg)),
+                ('slp', '{:.2f}'.format(slp_meter.avg)),
             ] + extra_postfix), refresh=False)
 
             if i == 0:
@@ -181,6 +192,8 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
             round(wps_meter.elapsed_time), round(wps_meter.avg), round(wpb_meter.avg))
         fmt += ' | bsz {:5d} | lr {:0.6f} | clip {:3.0f}%'.format(
             round(bsz_meter.avg), lr, clip_meter.avg * 100)
+        fmt += '| grg {:4f} | srg {:4f} | slp {:2f}'.format(
+            grg_meter.avg, srg_meter.avg, slp_meter.avg)
         fmt += ''.join(
             ' | {} {:.4f}'.format(k, meter.avg)
             for k, meter in extra_meters.items()
@@ -218,30 +231,42 @@ def validate(args, epoch, trainer, dataset, subset, ngpus):
                              max_positions=args.max_positions,
                              skip_invalid_size_inputs_valid_test=args.skip_invalid_size_inputs_valid_test)
     loss_meter = AverageMeter()
+    grg_meter = AverageMeter()    # greedy rouge
+    srg_meter = AverageMeter()    # sampled rouge
+    slp_meter = AverageMeter()    # sum log probability
     extra_meters = collections.defaultdict(lambda: AverageMeter())
 
     desc = '| epoch {:03d} | valid on \'{}\' subset'.format(epoch, subset)
     with progress_bar(itr, desc, leave=False) as t:
         for _, sample in data.skip_group_enumerator(t, ngpus):
-            loss_dict = trainer.valid_step(sample)
-            loss = loss_dict['loss']
-            del loss_dict['loss']  # don't include in extra_meters or extra_postfix
+            logging_dict = trainer.valid_step(sample)
+            loss = logging_dict['loss']
+            del logging_dict['loss']  # don't include in extra_meters or extra_postfix
 
             ntokens = sum(s['ntokens'] for s in sample)
             loss_meter.update(loss, ntokens)
+            grg_meter.update(logging_dict['mean_rouge_greedy'])
+            srg_meter.update(logging_dict['mean_rouge_sampled'])
+            slp_meter.update(logging_dict['mean_sum_log_prob'])
 
             extra_postfix = []
-            for k, v in loss_dict.items():
+            '''
+            for k, v in logging_dict.items():
                 extra_meters[k].update(v)
                 extra_postfix.append((k, '{:.4f}'.format(extra_meters[k].avg)))
-
+            '''
             t.set_postfix(collections.OrderedDict([
                 ('loss', '{:.2f}'.format(loss_meter.avg)),
+                ('grg', '{:.4f}'.format(grg_meter.avg)),
+                ('srg', '{:.4f}'.format(srg_meter.avg)),
+                ('slp', '{:.2f}'.format(slp_meter.avg)),
             ] + extra_postfix), refresh=False)
 
         val_loss = loss_meter.avg
         fmt = desc + ' | valid loss {:2.2f} | valid ppl {:3.2f}'.format(
             val_loss, get_perplexity(val_loss))
+        fmt += '| grg {:4f} | srg {:4f} | slp {:2f}'.format(
+            grg_meter.avg, srg_meter.avg, slp_meter.avg)
         fmt += ''.join(
             ' | {} {:.4f}'.format(k, meter.avg)
             for k, meter in extra_meters.items()

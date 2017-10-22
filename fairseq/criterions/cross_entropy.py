@@ -42,5 +42,8 @@ class CrossEntropyCriterion(FairseqCriterion):
         """Aggregate logging outputs from data parallel training."""
         sample_size = sum(log.get('sample_size', 0) for log in logging_outputs)
         return {
-            'loss': sum(log.get('loss', 0) for log in logging_outputs) / sample_size / math.log(2),
+            'loss': aggregate(logging_outputs, 'loss', default=0, avg=False) / sample_size / math.log(2),
+            'mean_rouge_greedy': aggregate(logging_outputs, 'mean_rouge_greedy', default=0, avg=True),
+            'mean_rouge_sampled': aggregate(logging_outputs, 'mean_rouge_sampled', default=0, avg=True),
+            'mean_sum_log_prob': aggregate(logging_outputs, 'mean_sum_log_prob', default=0, avg=True),
         }

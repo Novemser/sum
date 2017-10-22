@@ -33,3 +33,14 @@ class FairseqCriterion(_Loss):
     def grad_denom(sample_sizes):
         """Compute the gradient denominator for a set of sample sizes."""
         return sum(sample_sizes)
+
+    @staticmethod
+    def aggregate(logging_outputs, key, default=0, avg=True):
+        """
+        Aggregate logging outputs
+        """
+        if avg:
+            res = mean(log.get(key, default) for log in logging_outputs) 
+        else:
+            res = sum(log.get(key, default) for log in logging_outputs) 
+        return res
