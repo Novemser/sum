@@ -31,7 +31,7 @@ class LinearizedConvolution(ConvTBC):
             x = x[:-self.padding[0], :, :]
         return x
 
-    def incremental_forward(self, input):
+    def incremental_forward(self, input, enable_bp=False):
         """Forward convolution one time step at a time.
 
         This function maintains an internal state to buffer signal and
@@ -43,27 +43,48 @@ class LinearizedConvolution(ConvTBC):
             raise RuntimeError('LinearizedConvolution only supports inference')
 
         # run forward pre hooks (e.g., weight norm)
+        # enable_bp???
         for hook in self._forward_pre_hooks.values():
             hook(self, input)
 
-        # reshape weight
-        weight = self._get_linearized_weight()
         kw = self.kernel_size[0]
-
         bsz = input.size(0)  # input: bsz x len x dim
-        if kw > 1:
-            input = input.data
-            if self.input_buffer is None:
-                self.input_buffer = input.new(bsz, kw, input.size(2))
-                self.input_buffer.zero_()
-            else:
-                # shift buffer
-                self.input_buffer[:, :-1, :] = self.input_buffer[:, 1:, :].clone()
-            # append next input
-            self.input_buffer[:, -1, :] = input[:, -1, :]
-            input = torch.autograd.Variable(self.input_buffer, volatile=True)
-        output = F.linear(input.view(bsz, -1), weight, self.bias)
-        return output.view(bsz, 1, -1)
+        if not enable_bp:
+            # reshape weight
+            weight = self._get_linearized_weight()
+            if kw > 1:
+                input = input.data
+                if self.input_buffer is None:
+                    self.input_buffer = input.new(bsz, kw, input.size(2))
+                    self.input_buffer.zero_()
+                else:
+                    # shift buffer
+                    self.input_buffer[:, :-1, :] = self.input_buffer[:, 1:, :].clone()
+                # append next input
+                self.input_buffer[:, -1, :] = input[:, -1, :]
+                input = torch.autograd.Variable(self.input_buffer, volatile=True)
+            output = F.linear(input.view(bsz, -1), weight, self.bias)
+            return output.view(bsz, 1, -1)
+        else:
+            if kw > 1:
+                if self.input_buffer is None:
+                    self.input_buffer = torch.autograd.Variable(input.data.new(bsz, kw, input.size(2)))
+                    self.input_buffer.data.zero_()
+                else:
+                    # shift buffer
+                    self.input_buffer[:, :-1, :] = self.input_buffer[:, 1:, :].clone()
+                # append next input
+                self.input_buffer[:, -1, :] = input[:, -1, :].clone()
+            '''
+            self.input_buffer = self.input_buffer.transpose(0, 1) # kw * bsz * dim
+            output = self.forward(self.input_buffer)
+            output = self.remove_future_timesteps(output)
+            output = output.view(bsz, -1)
+            self.input_buffer = self.input_buffer.transpose(0, 1)
+            '''
+            output = F.linear(self.input_buffer.view(bsz, -1), weight, self.bias) ## TODO: use ordinary forward
+            return output.view(bsz, 1, -1)
+
 
     def clear_buffer(self):
         self.input_buffer = None

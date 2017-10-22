@@ -20,6 +20,9 @@ def get_parser(desc):
                         help='log progress every N updates (when progress bar is disabled)')
     parser.add_argument('--seed', default=1, type=int, metavar='N',
                         help='pseudo random number generator seed')
+    parser.add_argument('--cuda-visible-devices', type=str, default='1',
+                        help='select gpu devices to use')
+
     return parser
 
 
@@ -67,6 +70,13 @@ def add_optimization_args(parser):
                        help='If bigger than 0, use that number of mini-batches for each epoch,'
                             ' where each sample is drawn randomly with replacement from the'
                             ' dataset')
+    group.add_argument('-hardset_lr', action='store_true',
+                      help='hard set learning rate to the one given by --lr instead of that of checkpoint')
+    group.add_argument('-enable_rl', action='store_true',
+                       help='enable reinforcement learning')
+    group.add_argument('--loss_scale', default=0.99, type=float,
+                       help='scaling factor for the difference in magnitude between rl_loss and ml_loss')
+
     return group
 
 
@@ -114,6 +124,10 @@ def add_generation_args(parser):
                        help='performs unk word replacement')
     group.add_argument('--quiet', action='store_true',
                        help='Only print final scores')
+    group.add_argument('-enable_sample', action='store_true',
+                      help='decode in sample mode')
+    group.add_argument('--minlen', default=1, type=int, metavar='N',
+                       help=('generate sequence of min length'))
 
     return group
 

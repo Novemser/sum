@@ -261,7 +261,7 @@ class Decoder(nn.Module):
         """Returns maximum size of positions embeddings supported by this decoder"""
         return self.embed_positions.num_embeddings
 
-    def incremental_inference(self, beam_size=None):
+    def incremental_inference(self, beam_size=None, enable_bp=False):
         """Context manager for incremental inference.
 
         This provides an optimized forward pass for incremental inference
@@ -278,6 +278,9 @@ class Decoder(nn.Module):
                                     encoder_out)
                 probs = F.log_softmax(out[:, -1, :])
         ```
+
+        Args:
+            enable_bp: False to disable backward, such as by making Variable volatile, not changing forward mode, etc.
         """
         class IncrementalInference(object):
 
@@ -286,34 +289,36 @@ class Decoder(nn.Module):
                 self.beam_size = beam_size
 
             def __enter__(self):
-                self.decoder._start_incremental_inference(self.beam_size)
+                self.decoder._start_incremental_inference(self.beam_size, enable_bp)
 
             def __exit__(self, *args):
-                self.decoder._stop_incremental_inference()
+                self.decoder._stop_incremental_inference(enable_bp)
 
         return IncrementalInference(self, beam_size)
 
-    def _start_incremental_inference(self, beam_size):
+    def _start_incremental_inference(self, beam_size, enable_bp=False):
         assert not self._is_inference_incremental, \
             'already performing incremental inference'
         self._is_inference_incremental = True
 
-        # save original forward
-        self._orig_forward = self.forward
+        if not enable_bp:
+            # save original forward
+            self._orig_forward = self.forward
 
-        # switch to incremental forward
-        self.forward = self._incremental_forward
+            # switch to incremental forward
+            self.forward = self._incremental_forward
 
         # start a fresh sequence
         self.start_fresh_sequence(beam_size)
 
-    def _stop_incremental_inference(self):
+    def _stop_incremental_inference(self, enable_bp=False):
         # restore original forward
-        self.forward = self._orig_forward
+        if not enable_bp:
+            self.forward = self._orig_forward
 
         self._is_inference_incremental = False
 
-    def _incremental_forward(self, tokens, positions, encoder_out):
+    def _incremental_forward(self, tokens, positions, encoder_out, enable_bp=False):
         assert self._is_inference_incremental
 
         # setup initial state
@@ -344,7 +349,7 @@ class Decoder(nn.Module):
         num_attn_layers = len(self.attention)
         for proj, conv, attention in zip(self.projections, self.convolutions, self.attention):
             residual = x if proj is None else proj(x)
-            x = conv.incremental_forward(x)
+            x = conv.incremental_forward(x, enable_bp)
             x = F.glu(x)
 
             # attention
@@ -453,7 +458,7 @@ class GradMultiply(torch.autograd.Function):
 
 def get_archs():
     return [
-        'fconv', 'fconv_iwslt_de_en', 'fconv_wmt_en_ro', 'fconv_wmt_en_de', 'fconv_wmt_en_fr',
+        'fconv', 'fconv_giga', 'fconv_iwslt_de_en', 'fconv_wmt_en_ro', 'fconv_wmt_en_de', 'fconv_wmt_en_fr', 'fconv_giga_large',
     ]
 
 
@@ -478,6 +483,18 @@ def parse_arch(args):
         args.decoder_embed_dim = 256
         args.decoder_layers = '[(256, 3)] * 3'
         args.decoder_out_embed_dim = 256
+    elif args.arch == 'fconv_giga':
+        args.encoder_embed_dim = 256
+        args.encoder_layers = '[(256, 3)] * 6'
+        args.decoder_embed_dim = 256
+        args.decoder_layers = '[(256, 3)] * 6'
+        args.decoder_out_embed_dim = 256 
+    elif args.arch == 'fconv_giga_large':
+        args.encoder_embed_dim = 512
+        args.encoder_layers = '[(256, 3)] * 9'
+        args.decoder_embed_dim = 512
+        args.decoder_layers = '[(256, 3)] * 6'
+        args.decoder_out_embed_dim = 512
     elif args.arch == 'fconv_wmt_en_ro':
         args.encoder_embed_dim = 512
         args.encoder_layers = '[(512, 3)] * 20'

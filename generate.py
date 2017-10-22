@@ -63,7 +63,8 @@ def main():
     # Initialize generator
     translator = SequenceGenerator(
         models, beam_size=args.beam, stop_early=(not args.no_early_stop),
-        normalize_scores=(not args.unnormalized), len_penalty=args.lenpen
+        normalize_scores=(not args.unnormalized), len_penalty=args.lenpen,
+        minlen=args.minlen
     )
     if use_cuda:
         translator.cuda()
@@ -117,7 +118,9 @@ def main():
             if use_cuda:
                 positions = positions.cuda()
                 tokens = tokens.cuda()
-            translations = translator.generate(Variable(tokens.view(1, -1)), Variable(positions.view(1, -1)))
+            translations = translator.generate(Variable(tokens.view(1, -1)), 
+                Variable(positions.view(1, -1)),
+                enable_sample=args.enable_sample)
             hypos = translations[0]
             display_hypotheses(None, tokens, line, None, hypos[:min(len(hypos), args.nbest)])
 

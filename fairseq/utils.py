@@ -16,6 +16,8 @@ from torch.serialization import default_restore_location
 
 from fairseq import criterions, models
 
+from fairseq.rouge import rouge
+
 
 def parse_args_and_arch(parser):
     args = parser.parse_args()
@@ -51,9 +53,21 @@ def save_state(filename, args, model, criterion, optimizer, lr_scheduler, optim_
         optim_history = []
     if extra_state is None:
         extra_state = {}
+    prefix_to_remove = 'decoder._orig' # TODO: better handle such case
+    copy_dict = model.state_dict()
+    keys = list(copy_dict.keys())
+    
+    for k in keys:
+        # print(k)
+        if prefix_to_remove in k:
+            # print('removed: {}'.format(k))
+            del copy_dict[k]
+            # print(k in copy_dict)
+
     state_dict = {
         'args': args,
         'model': model.state_dict(),
+        # 'model': copy_dict,
         'optimizer_history': optim_history + [
             {
                 'criterion_name': criterion.__class__.__name__,
@@ -66,7 +80,7 @@ def save_state(filename, args, model, criterion, optimizer, lr_scheduler, optim_
     torch_persistent_save(state_dict, filename)
 
 
-def load_state(filename, model, criterion, optimizer, lr_scheduler, cuda_device=None):
+def load_state(filename, model, criterion, optimizer, lr_scheduler, args=None, cuda_device=None):
     if not os.path.exists(filename):
         return None, []
     if cuda_device is None:
@@ -87,6 +101,9 @@ def load_state(filename, model, criterion, optimizer, lr_scheduler, cuda_device=
     if last_optim['criterion_name'] == criterion.__class__.__name__:
         optimizer.load_state_dict(last_optim['optimizer'])
         lr_scheduler.best = last_optim['best_loss']
+        # hard set learning rate when needed
+        if args and args.hardset_lr:
+            optimizer.param_groups[0]['lr'] = args.lr
 
     return state['extra_state'], optim_history
 
@@ -154,3 +171,59 @@ def prepare_sample(sample, volatile=False, cuda_device=None):
             for key in ['src_tokens', 'src_positions', 'input_tokens', 'input_positions']
         },
     }
+
+def evaluate(hypotheses, references, metric='rouge_l/f_score'):
+    """
+    summary: []
+    reference: []
+    """
+    scores = rouge(hypotheses, references)
+    return scores[metric].item()
+
+def to_token(dict, i, runk):
+    return runk if i == dict.unk() else dict[i]
+
+def unk_symbol(dict, ref_unk=False):
+    return '<{}>'.format(dict.unk_word) if ref_unk else dict.unk_word
+
+def to_sentence(dict, tokens, bpe_symbol=None, ref_unk=False):
+    if torch.is_tensor(tokens) and tokens.dim() == 2:
+        sentences = [to_sentence(dict, token) for token in tokens]
+        return '\n'.join(sentences)
+    eos = dict.eos()
+    runk = unk_symbol(dict, ref_unk=ref_unk)
+    sent = ' '.join([to_token(dict, i, runk) for i in tokens if i != eos])
+    if bpe_symbol is not None:
+        sent = sent.replace(bpe_symbol, '')
+    return sent
+
+'''
+def _display_hypotheses(id, src, orig, ref, hypos, src_dict, dst_dict):
+    """
+    Dispaly hypos with bpe symbol always removed
+    """
+    bpe_symbol = '@@'
+    id_str = '' if id is None else '-{}'.format(id)
+    hypo_str = []
+    sum_log_probs = []
+    # print('S{}\t{}'.format(id_str, src_str))
+    if orig is not None:
+        print('O{}\t{}'.format(id_str, orig.strip()))
+    ref_str = to_sentence(dst_dict, ref, bpe_symbol, ref_unk=True)
+    for hypo in hypos:
+        hypo_str.append(to_sentence(dst_dict, hypo['tokens'], bpe_symbol))
+        sum_log_probs.append(hypo['sum_log_prob'])
+        # if args.unk_replace_dict != '':
+        #    hypo_str = replace_unk(hypo_str, align_str, orig, unk_symbol(dst_dict))
+    return ref_str, hypo_str, sum_log_probs
+'''
+
+def display_hypotheses(id, ref, hypos, src_dict, dst_dict, args=None):
+        ref_str = dst_dict.string(ref, args.remove_bpe, escape_unk=True)
+        hypo_str = []
+        sum_log_probs = []
+        for hypo in hypos:
+            hypo_str.append(dst_dict.string(hypo['tokens'], args.remove_bpe))
+            sum_log_probs.append(hypo['sum_log_prob'])
+        return ref_str, hypo_str, sum_log_probs
+            

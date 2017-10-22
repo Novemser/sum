@@ -17,7 +17,7 @@ from fairseq import utils
 
 class SequenceGenerator(object):
     def __init__(self, models, beam_size=1, minlen=1, maxlen=200,
-                 stop_early=True, normalize_scores=True, len_penalty=1):
+                 stop_early=True, normalize_scores=True, len_penalty=1, enable_sample=False):
         """Generates translations of a given source sentence.
 
         Args:
@@ -27,10 +27,12 @@ class SequenceGenerator(object):
                 hypotheses, even though longer hypotheses might have better
                 normalized scores.
             normalize_scores: Normalize scores by the length of the output.
+            enable_sample: if enable sampling; True implies also enable_bp
         """
         self.models = models
         self.pad = models[0].dst_dict.pad()
         self.eos = models[0].dst_dict.eos()
+        self.dict = models[0].dst_dict
         assert all(m.dst_dict.pad() == self.pad for m in self.models[1:])
         assert all(m.dst_dict.eos() == self.eos for m in self.models[1:])
         self.vocab_size = len(models[0].dst_dict)
@@ -42,6 +44,7 @@ class SequenceGenerator(object):
         self.stop_early = stop_early
         self.normalize_scores = normalize_scores
         self.len_penalty = len_penalty
+        self.enable_sample = enable_sample
 
     def cuda(self):
         for model in self.models:
@@ -50,7 +53,7 @@ class SequenceGenerator(object):
         return self
 
     def generate_batched_itr(self, data_itr, maxlen_a=0.0, maxlen_b=200,
-                             cuda_device=None, timer=None):
+                             cuda_device=None, timer=None, enable_sample=None):
         """Iterate over a batched dataset and yield individual translations.
 
         Args:
@@ -59,18 +62,18 @@ class SequenceGenerator(object):
             cuda_device: GPU on which to do generation.
             timer: StopwatchMeter for timing generations.
         """
-
+        enable_sample = self.enable_sample if not enable_sample else enable_sample
         def lstrip_pad(tensor):
             return tensor[tensor.eq(self.pad).sum():]
 
         for sample in data_itr:
-            s = utils.prepare_sample(sample, volatile=True, cuda_device=cuda_device)
+            s = utils.prepare_sample(sample, volatile=not enable_sample, cuda_device=cuda_device)
             input = s['net_input']
             srclen = input['src_tokens'].size(1)
             if timer is not None:
                 timer.start()
             hypos = self.generate(input['src_tokens'], input['src_positions'],
-                                  maxlen=int(maxlen_a*srclen + maxlen_b))
+                                  maxlen=int(maxlen_a*srclen + maxlen_b), enable_sample=enable_sample)
             if timer is not None:
                 timer.stop(s['ntokens'])
             for i, id in enumerate(s['id']):
@@ -79,14 +82,18 @@ class SequenceGenerator(object):
                 ref = lstrip_pad(s['target'].data[i, :])
                 yield id, src, ref, hypos[i]
 
-    def generate(self, src_tokens, src_positions, beam_size=None, maxlen=None):
+    def generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, enable_sample=None):
         """Generate a batch of translations."""
+        enable_sample = self.enable_sample if not enable_sample else enable_sample
         with ExitStack() as stack:
             for model in self.models:
                 stack.enter_context(model.decoder.incremental_inference())
-            return self._generate(src_tokens, src_positions, beam_size, maxlen)
+            return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample=enable_sample)
 
-    def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None):
+    def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, enable_sample=None):
+        enable_sample = self.enable_sample if not enable_sample else enable_sample
+        if enable_sample:
+            assert beam_size == 1, 'in sample mode, beam_size must be 1'
         bsz = src_tokens.size(0)
         maxlen = min(maxlen, self.maxlen) if maxlen is not None else self.maxlen
 
@@ -105,11 +112,17 @@ class SequenceGenerator(object):
             encoder_outs.append(encoder_out)
 
         # initialize buffers
-        scores = encoder_outs[0][0].data.new(bsz * beam_size).fill_(0)
+        if not enable_sample:
+            scores = encoder_outs[0][0].data.new(bsz * beam_size).fill_(0)
+        else:
+            scores = Variable(encoder_outs[0][0].data.new(bsz * beam_size).fill_(0))
         tokens = src_tokens.data.new(bsz * beam_size, maxlen + 2).fill_(self.pad)
         tokens_buf = tokens.clone()
         tokens[:, 0] = self.eos
-        attn = scores.new(bsz * beam_size, src_tokens.size(1), maxlen + 2)
+        if not enable_sample:
+            attn = scores.new(bsz * beam_size, src_tokens.size(1), maxlen + 2)
+        else:
+            attn = scores.data.new(bsz * beam_size, src_tokens.size(1), maxlen + 2)
         attn_buf = attn.clone()
 
         # list of completed sentences
@@ -146,6 +159,8 @@ class SequenceGenerator(object):
                 # finalized one
                 bbsz = sent*beam_size
                 best_unfinalized_score = scores[bbsz:bbsz+beam_size].max()
+                if enable_sample:
+                    best_unfinalized_score = best_unfinalized_score.data
                 if self.normalize_scores:
                     best_unfinalized_score /= maxlen
                 if worst_finalized[sent]['score'] >= best_unfinalized_score:
@@ -169,9 +184,11 @@ class SequenceGenerator(object):
                     for each hypothesis
             """
             assert bbsz_idx.numel() == scores.numel()
+            sum_log_probs = scores
+            scores = scores.data
             norm_scores = scores/math.pow(step+1, self.len_penalty) if self.normalize_scores else scores
             sents_seen = set()
-            for idx, score in zip(bbsz_idx.cpu(), norm_scores.cpu()):
+            for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs):
                 sent = idx // beam_size
                 sents_seen.add(sent)
 
@@ -185,6 +202,7 @@ class SequenceGenerator(object):
                         'score': score,
                         'attention': attention,
                         'alignment': alignment,
+                        'sum_log_prob': sum_log_prob
                     }
 
                 if len(finalized[sent]) < beam_size:
@@ -217,27 +235,44 @@ class SequenceGenerator(object):
                 for model in self.models:
                     model.decoder.reorder_incremental_state(reorder_state)
 
-            probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)
+            probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs, enable_sample=enable_sample)
+            if enable_sample:
+                probs_ = probs.data
+
             if step == 0:
                 # at the first step all hypotheses are equally likely, so use
                 # only the first beam
                 probs = probs.unfold(0, 1, beam_size).squeeze(2).contiguous()
+                if enable_sample:
+                    probs_ = probs_.unfold(0, 1, beam_size).squeeze(2).contiguous()
             else:
                 # make probs contain cumulative scores for each hypothesis
-                probs.add_(scores.view(-1, 1))
+                if enable_sample:
+                    probs = torch.add(probs, scores.view(-1, 1))
+                else:
+                    probs.add_(scores.view(-1, 1))
             probs[:, self.pad] = -math.inf  # never select pad
+            if enable_sample:
+                probs_[:, self.pad] = -math.inf
 
             # Record attention scores
             attn[:, :, step+1].copy_(avg_attn_scores)
 
             # take the best 2 x beam_size predictions. We'll choose the first
             # beam_size of these which don't predict eos to continue with.
-            cand_scores = buffer('cand_scores', type_of=scores)
+            cand_scores = buffer('cand_scores', type_of=attn) # attn has the same type as scores.data
             cand_indices = buffer('cand_indices')
             cand_beams = buffer('cand_beams')
-            probs.view(bsz, -1).topk(
-                min(cand_size, probs.view(bsz, -1).size(1) - 1),  # -1 so we never select pad
-                out=(cand_scores, cand_indices))
+            if not enable_sample:
+                probs.view(bsz, -1).topk(
+                    min(cand_size, probs.view(bsz, -1).size(1) - 1),  # -1 so we never select pad
+                    out=(cand_scores, cand_indices))
+            else:
+                cand_indices = torch.multinomial(probs_.view(bsz, -1).exp(), 
+                    min(cand_size, probs_.view(bsz, -1).size(1) - 1), 
+                    replacement=True)
+                cand_scores = torch.gather(probs.view(bsz, -1), 1, Variable(cand_indices, requires_grad=False))
+
             torch.div(cand_indices, self.vocab_size, out=cand_beams)
             cand_indices.fmod_(self.vocab_size)
 
@@ -252,8 +287,11 @@ class SequenceGenerator(object):
                 eos_bbsz_idx = buffer('eos_bbsz_idx')
                 cand_bbsz_idx.masked_select(eos_mask, out=eos_bbsz_idx)
                 if eos_bbsz_idx.numel() > 0:
-                    eos_scores = buffer('eos_scores', type_of=scores)
-                    cand_scores.masked_select(eos_mask, out=eos_scores)
+                    eos_scores = buffer('eos_scores', type_of=attn)
+                    if not enable_sample:
+                        cand_scores.masked_select(eos_mask, out=eos_scores)
+                    else:
+                        eos_scores = torch.masked_select(cand_scores, Variable(eos_mask, requires_grad=False))
                     num_remaining_sent -= finalize_hypos(step, eos_bbsz_idx, eos_scores)
 
             assert num_remaining_sent >= 0
@@ -273,8 +311,15 @@ class SequenceGenerator(object):
             active_mask.topk(beam_size, 1, largest=False, out=(_ignore, active_hypos))
             active_bbsz_idx = buffer('active_bbsz_idx')
             cand_bbsz_idx.gather(1, active_hypos, out=active_bbsz_idx)
-            active_scores = cand_scores.gather(1, active_hypos,
-                                               out=scores.view(bsz, beam_size))
+            if not enable_sample:
+                active_scores = cand_scores.gather(1, active_hypos,
+                                                   out=scores.view(bsz, beam_size))
+            else:
+                active_scores = cand_scores.gather(1, Variable(active_hypos, requires_grad=False))
+                scores = scores.view(bsz, beam_size)
+                scores = cand_scores.gather(1, Variable(active_hypos, requires_grad=False))
+                scores = scores.view(-1)
+
 
             active_bbsz_idx = active_bbsz_idx.view(-1)
             active_scores = active_scores.view(-1)
@@ -313,31 +358,46 @@ class SequenceGenerator(object):
 
         return finalized
 
-    def _decode(self, tokens, encoder_outs):
+    def _decode(self, tokens, encoder_outs, enable_sample=None):
+        enable_sample = self.enable_sample if not enable_sample else enable_sample
+        enable_bp = enable_sample
         length = tokens.size(1)
 
         # repeat the first length positions to fill batch
         positions = self.positions[:length].view(1, length)
 
         # wrap in Variables
-        tokens = Variable(tokens, volatile=True)
-        positions = Variable(positions, volatile=True)
+        tokens = Variable(tokens, volatile=not enable_sample)
+        positions = Variable(positions, volatile=not enable_sample)
 
         avg_probs = None
         avg_attn = None
         for model, encoder_out in zip(self.models, encoder_outs):
-            decoder_out, attn = model.decoder(tokens, positions, encoder_out)
-            probs = F.softmax(decoder_out[:, -1, :]).data
-            attn = attn[:, -1, :].data
+            decoder_out, attn = model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)
+            if not enable_sample:
+                probs = F.softmax(decoder_out[:, -1, :]).data
+                attn = attn[:, -1, :].data
+            else:
+                probs = F.softmax(decoder_out[:, -1, :])
+                attn = attn[:, -1, :]
             if avg_probs is None or avg_attn is None:
                 avg_probs = probs
                 avg_attn = attn
             else:
-                avg_probs.add_(probs)
-                avg_attn.add_(attn)
-        avg_probs.div_(len(self.models))
-        avg_probs.log_()
-        avg_attn.div_(len(self.models))
+                if not enable_sample:
+                    avg_probs.add_(probs)
+                    avg_attn.add_(attn)
+                else:
+                    avg_probs = torch.add(avg_probs, probs)
+                    avg_attn = torch.add(avg_attn, attn)
+        if not enable_sample:
+            avg_probs.div_(len(self.models))
+            avg_probs.log_()
+            avg_attn.div_(len(self.models))
+        else:
+            avg_probs = torch.div(avg_probs, len(self.models))
+            avg_probs = torch.log(avg_probs)
+            avg_attn = torch.div(avg_attn, len(self.models))
 
         return avg_probs, avg_attn
 

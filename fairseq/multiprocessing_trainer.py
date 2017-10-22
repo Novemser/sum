@@ -12,12 +12,23 @@ Train a network on multiple GPUs using multiprocessing.
 
 from itertools import cycle, islice
 import torch
+from torch.autograd import Variable
 from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
 
 from fairseq import nccl, utils
 from fairseq.multiprocessing_event_loop import MultiprocessingEventLoop, Future
 from fairseq.nag import NAG
+from fairseq.sequence_generator import SequenceGenerator
 
+from collections import namedtuple
+ 
+import numpy as np
+# res tuples
+Results = namedtuple('Results', 
+    ['loss', 'grad_norm', 'ml_loss', 
+    'rl_loss', 'mean_rouge_greedy', 
+    'mean_rouge_sampled', 'mean_sum_log_prob']
+    )        
 
 class MultiprocessingTrainer(MultiprocessingEventLoop):
     """Main class for multi-GPU training.
@@ -34,7 +45,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
     OPTIMIZERS = ['adagrad', 'adam', 'nag', 'sgd']
 
     def __init__(self, args, model, criterion, device_ids=None,
-                 multiprocessing_method='spawn'):
+                 multiprocessing_method='spawn',
+                 src_dict=None, dst_dict=None):
         if device_ids is None:
             device_ids = tuple(range(torch.cuda.device_count()))
         super().__init__(device_ids, multiprocessing_method)
@@ -47,13 +59,15 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
         Future.gen_list([
             self.call_async(rank, '_async_init', args=args, model=model,
-                            criterion=criterion, nccl_uid=nccl_uid)
+                            criterion=criterion, nccl_uid=nccl_uid,
+                            src_dict=src_dict, dst_dict=dst_dict
+                            )
             for rank in range(self.num_replicas)
         ])
 
         self._grads_initialized = False
 
-    def _async_init(self, rank, device_id, args, model, criterion, nccl_uid):
+    def _async_init(self, rank, device_id, args, model, criterion, nccl_uid, src_dict=None, dst_dict=Non):
         """Initialize child processes."""
         self.args = args
 
@@ -72,9 +86,22 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.flat_grads = None
         self.loss = None
 
+        # copy src and dst dictionary
+        self.src_dict = src_dict
+        self.dst_dict = dst_dict
+
+        # copy enable rl
+        self.enable_rl = args.enable_rl
+
         # initialize LR scheduler
         self.lr_scheduler = self._build_lr_scheduler()
 
+        # initialize generator
+        models = [model] # SequenceGenerator accepts a list of models
+        self.generator = SequenceGenerator(models, beam_size=1, minlen=args.minlen, 
+            maxlen=args.max_len_b, stop_early=(not args.no_early_stop), 
+            normalize_scores=(not args.unnormalized), len_penalty=args.lenpen).cuda()
+        
     def _build_optimizer(self):
         if self.args.optimizer == 'adagrad':
             return torch.optim.Adagrad(self.model.parameters(), lr=self.args.lr,
@@ -147,6 +174,50 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
 
     def _async_set_seed(self, rank, device_id, seed):
         torch.manual_seed(seed)
+
+    def generate(self, input):
+        """
+        Generate greedy and sampled outputs
+        """
+        def lstrip_pad(tensor):
+            pad = self.generator.pad
+            return tensor[tensor.eq(pad).sum():]
+        
+        args = self.args
+        srclen = input['src_tokens'].size(1)
+        sampled_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                             maxlen=(args.max_len_a*srclen  args.max_len_b), 
+                             enable_sample=True)
+        greedy_hypos = self.generator.generate(input['src_tokens'], input['src_positions'],
+                              maxlen=(args.max_len_a*srclen + args.max_len_b), 
+                              enable_sample=False)
+        
+        
+        #greedy_hypos = sampled_hypos
+        ref_hypo_res = [] # [(ref_str, greedy_hypo_str, sampled_hypo_str)]
+        for i, id in enumerate(self._sample['id']):
+            src = input['src_tokens'].data[i, :]
+            # remove padding from ref, which appears at the beginning
+            ref = lstrip_pad(self._sample['target'].data[i, :])
+            greedy_hypo = greedy_hypos[i]
+            sampled_hypo = sampled_hypos[i]
+            
+            ref = ref.int().cpu()
+            # we don't need sum_log_probs for greedy output
+            ref_str, greedy_hypo_str, _ = utils.display_hypotheses(id, src, None, ref, 
+                                                                 greedy_hypo[:min(len(greedy_hypo), args.nbest)],
+                                                                 self.src_dict, self.dst_dict)
+            _, sampled_hypo_str, _sum_log_probs = utils.display_hypotheses(id, src, None, ref, 
+                                                                 sampled_hypo[:min(len(sampled_hypo), args.nbest)],
+                                                                 self.src_dict, self.dst_dict)
+            #print('----------')
+            #print('ref: {}\n greedy_hypo: {}\n sampled_hypo: {}'.format(ref_str, greedy_hypo_str, sampled_hypo_str))
+            ref_hypo_res.append((ref_str, greedy_hypo_str[0], 
+                                 sampled_hypo_str[0], 
+                                 _sum_log_probs[0],
+                                 sampled_hypo[0]['tokens'])) # beam_size = 1
+        
+        return ref_hypo_res
 
     def train_step(self, samples):
         """Do forward, backward and gradient step in parallel."""
