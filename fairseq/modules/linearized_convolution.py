@@ -82,6 +82,8 @@ class LinearizedConvolution(ConvTBC):
                     self.input_buffer[:, :-1, :] = _next_buffer
                 # append next input
                 self.input_buffer[:, -1, :] = input[:, -1, :].clone()
+            else:
+                self.input_buffer = input.clone()
             output = F.linear(self.input_buffer.view(bsz, -1), weight, self.bias)
             return output.view(bsz, 1, -1)
             '''

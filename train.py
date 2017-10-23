@@ -203,7 +203,7 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
         t.write(fmt)
 
 
-def save_checkpoint(trainer, args, epoch, batch_offset, val_loss):
+def save_checkpoint(trainer, args, epoch, batch_offset, val_loss=None):
     extra_state = {
         'epoch': epoch,
         'batch_offset': batch_offset,
@@ -215,11 +215,12 @@ def save_checkpoint(trainer, args, epoch, batch_offset, val_loss):
             epoch_filename = os.path.join(args.save_dir, 'checkpoint{}.pt'.format(epoch))
             trainer.save_checkpoint(epoch_filename, extra_state)
 
-        assert val_loss is not None
-        if not hasattr(save_checkpoint, 'best') or val_loss < save_checkpoint.best:
-            save_checkpoint.best = val_loss
-            best_filename = os.path.join(args.save_dir, 'checkpoint_best.pt')
-            trainer.save_checkpoint(best_filename, extra_state)
+        # assert val_loss is not None
+        if val_loss:
+            if not hasattr(save_checkpoint, 'best') or val_loss < save_checkpoint.best:
+                save_checkpoint.best = val_loss
+                best_filename = os.path.join(args.save_dir, 'checkpoint_best.pt')
+                trainer.save_checkpoint(best_filename, extra_state)
 
     last_filename = os.path.join(args.save_dir, 'checkpoint_last.pt')
     trainer.save_checkpoint(last_filename, extra_state)
