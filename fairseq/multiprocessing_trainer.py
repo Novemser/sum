@@ -322,7 +322,6 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             # compute rl loss
             rl_loss = Variable(rouge_delta.cuda(), requires_grad=False) * sum_log_probs
             self.rl_loss = torch.sum(rl_loss) / torch.sum(Variable(seq_lens, requires_grad=False))
-
             # compute hybrid loss
             ml_loss = self.loss
             self.loss = args.loss_scale * self.rl_loss + (1 - args.loss_scale) * ml_loss

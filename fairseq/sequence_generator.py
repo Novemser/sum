@@ -88,6 +88,7 @@ class SequenceGenerator(object):
         with ExitStack() as stack:
             for model in self.models:
                 stack.enter_context(model.decoder.incremental_inference())
+            
             return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample=enable_sample)
             '''
             if enable_sample:
@@ -149,9 +150,9 @@ class SequenceGenerator(object):
                 unfinished = unfinished * cand_indices.ne(self.eos)
                 if unfinished.sum() == 0:
                     break
-            cand_indices = cand_indices * unfinished.type_as(cand_indices)
+            cand_indices = cand_indices * unfinished.type_as(cand_indices) + self.pad*(~unfinished).type_as(cand_indices)
             tokens[:, step+1] = cand_indices
-            seq_log_probs[:, step] = sampled_log_prob.view(-1)
+            seq_log_probs[:, step] = sampled_log_prob.view(-1) * Variable(unfinished.float(), requires_grad=False)
             
         for i in range(bsz):
             finalized[i].append(
@@ -161,7 +162,7 @@ class SequenceGenerator(object):
                         'alignment': [0],
                         'score': 0,
                         'attention': 0,
-                        'sum_log_prob': torch.sum(seq_log_probs[i, :]) + torch.sum(probs)
+                        'sum_log_prob': torch.sum(seq_log_probs[i, :])
                     })
             
         return finalized
