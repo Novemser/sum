@@ -498,7 +498,7 @@ class Decoder(nn.Module):
         """Returns maximum size of positions embeddings supported by this decoder"""
         return self.embed_positions.num_embeddings
 
-    def incremental_inference(self, beam_size=None, enable_bp=False):
+    def incremental_inference(self, beam_size=None, testing=True):
         """Context manager for incremental inference.
 
         This provides an optimized forward pass for incremental inference
@@ -530,19 +530,18 @@ class Decoder(nn.Module):
                 self.beam_size = beam_size
 
             def __enter__(self):
-                self.decoder._start_incremental_inference(self.beam_size, enable_bp)
+                self.decoder._start_incremental_inference(self.beam_size, testing)
 
             def __exit__(self, *args):
-                self.decoder._stop_incremental_inference(enable_bp)
+                self.decoder._stop_incremental_inference(testing)
 
         return IncrementalInference(self, beam_size)
 
-    def _start_incremental_inference(self, beam_size, enable_bp=False):
+    def _start_incremental_inference(self, beam_size, testing=True):
         assert not self._is_inference_incremental, \
             'already performing incremental inference'
         self._is_inference_incremental = True
-
-        if not enable_bp:
+        if testing:
             # save original forward and convolution layers
             self._orig_forward = self.forward
             self._orig_conv = self.convolutions
@@ -555,9 +554,9 @@ class Decoder(nn.Module):
         self.start_fresh_sequence(beam_size)
         ### HEAD self.clear_incremental_state()
 
-    def _stop_incremental_inference(self, enable_bp=False):
+    def _stop_incremental_inference(self, testing=True):
         # restore original forward
-        if not enable_bp:
+        if testing:
             self.forward = self._orig_forward
             self.convolutions = self._orig_conv
             self.convolutions_topic = self._orig_conv_topic ###

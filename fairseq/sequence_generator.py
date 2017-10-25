@@ -17,7 +17,8 @@ from fairseq import utils
 
 class SequenceGenerator(object):
     def __init__(self, models, beam_size=1, minlen=1, maxlen=200,
-                 stop_early=True, normalize_scores=True, len_penalty=1, enable_topic=True, enable_sample=False):
+                 stop_early=True, normalize_scores=True, len_penalty=1, 
+                 enable_topic=True, enable_sample=False, testing=True):
         """Generates translations of a given source sentence.
 
         Args:
@@ -49,6 +50,7 @@ class SequenceGenerator(object):
 
         self.enable_topic = enable_topic
         self.enable_sample = enable_sample
+        self.testing = testing
 
     def cuda(self):
         for model in self.models:
@@ -95,7 +97,7 @@ class SequenceGenerator(object):
         enable_sample = self.enable_sample if not enable_sample else enable_sample
         with ExitStack() as stack:
             for model in self.models:
-                stack.enter_context(model.decoder.incremental_inference())
+                stack.enter_context(model.decoder.incremental_inference(testing=self.testing))
             
             return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample=enable_sample)
             '''
@@ -479,8 +481,11 @@ class SequenceGenerator(object):
 
             ###decoder_out, attn = model.decoder(tokens, positions, encoder_out)
             ###probs = F.softmax(decoder_out[:, -1, :]).data
-            if self.enable_topic :
-                x, x_topic, attn_scores, attn_scores_topic, topic_words_mask= model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)
+            if self.enable_topic:
+                if self.testing:
+                    x, x_topic, attn_scores, attn_scores_topic, topic_words_mask= model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)
+                else:
+                    x, x_topic, attn_scores, attn_scores_topic, topic_words_mask= model.decoder._incremental_forward(tokens, positions, encoder_out, enable_bp=enable_bp)
                 logits_exp = torch.exp(x) + torch.exp(x_topic) * torch.autograd.Variable(topic_words_mask.expand(x_topic.size(0), x_topic.size(1), topic_words_mask.size(0)), requires_grad=False)
 #                print("logits_exp.size():"+str(logits_exp.size()))
 
@@ -491,7 +496,10 @@ class SequenceGenerator(object):
                     attn = attn.data
 #                print("probs:"+str(probs))
             else:
-                decoder_out, attn = model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)
+                if self.testing:
+                    decoder_out, attn = model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)
+                else:
+                    decoder_out, attn = model.decoder._incremental_forward(tokens, positions, encoder_out, enable_bp=enable_bp)
                 if not enable_sample:
                     probs = F.softmax(decoder_out[:, -1, :]).data
                     attn = attn[:, -1, :].data
