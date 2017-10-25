@@ -16,8 +16,8 @@ from fairseq import utils
 
 
 class SequenceGenerator(object):
-    def __init__(self, models, dst_dict, beam_size=1, minlen=4, maxlen=200,
-                 stop_early=True, normalize_scores=True, len_penalty=1,enable_topic=True):
+    def __init__(self, models, beam_size=1, minlen=1, maxlen=200,
+                 stop_early=True, normalize_scores=True, len_penalty=1, enable_topic=True, enable_sample=False):
         """Generates translations of a given source sentence.
 
         Args:
@@ -27,21 +27,28 @@ class SequenceGenerator(object):
                 hypotheses, even though longer hypotheses might have better
                 normalized scores.
             normalize_scores: Normalize scores by the length of the output.
+
+            enable_sample: if enable sampling; True implies also enable_bp
         """
         self.models = models
-        self.dict = dst_dict
-        self.pad = dst_dict.pad()
-        self.eos = dst_dict.eos()
-        self.vocab_size = len(dst_dict)
+        self.pad = models[0].dst_dict.pad()
+        self.eos = models[0].dst_dict.eos()
+        self.dict = models[0].dst_dict
+        assert all(m.dst_dict.pad() == self.pad for m in self.models[1:])
+        assert all(m.dst_dict.eos() == self.eos for m in self.models[1:])
+        self.vocab_size = len(models[0].dst_dict)
         self.beam_size = beam_size
         self.minlen = minlen
-        self.maxlen = maxlen
-        self.positions = torch.LongTensor(range(self.pad + 1, self.pad + maxlen + 2))
+        self.maxlen = min(maxlen, *[m.decoder.max_positions() - self.pad - 2 for m in self.models])
+        self.positions = torch.LongTensor(range(self.pad + 1, self.pad + self.maxlen + 2))
+
         self.decoder_context = models[0].decoder.context_size()
         self.stop_early = stop_early
         self.normalize_scores = normalize_scores
         self.len_penalty = len_penalty
+
         self.enable_topic = enable_topic
+        self.enable_sample = enable_sample
 
     def cuda(self):
         for model in self.models:
@@ -49,8 +56,10 @@ class SequenceGenerator(object):
         self.positions = self.positions.cuda()
         return self
 
-    def generate_batched_itr(self, data_itr, maxlen_a=0, maxlen_b=200,
-                             cuda_device=None, timer=None):
+
+    def generate_batched_itr(self, data_itr, maxlen_a=0.0, maxlen_b=200,
+                             cuda_device=None, timer=None, enable_sample=None):
+
         """Iterate over a batched dataset and yield individual translations.
 
         Args:
@@ -60,17 +69,19 @@ class SequenceGenerator(object):
             timer: StopwatchMeter for timing generations.
         """
 
+        enable_sample = self.enable_sample if not enable_sample else enable_sample
+
         def lstrip_pad(tensor):
             return tensor[tensor.eq(self.pad).sum():]
 
         for sample in data_itr:
-            s = utils.prepare_sample(sample, volatile=True, cuda_device=cuda_device)
+            s = utils.prepare_sample(sample, volatile=not enable_sample, cuda_device=cuda_device)
             input = s['net_input']
             srclen = input['src_tokens'].size(1)
             if timer is not None:
                 timer.start()
             hypos = self.generate(input['src_tokens'], input['src_positions'],
-                                  maxlen=(maxlen_a*srclen + maxlen_b))
+                                  maxlen=int(maxlen_a*srclen + maxlen_b), enable_sample=enable_sample)
             if timer is not None:
                 timer.stop(s['ntokens'])
             for i, id in enumerate(s['id']):
@@ -79,22 +90,111 @@ class SequenceGenerator(object):
                 ref = lstrip_pad(s['target'].data[i, :])
                 yield id, src, ref, hypos[i]
 
-    def generate(self, src_tokens, src_positions, beam_size=None, maxlen=None):
+    def generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, enable_sample=None):
         """Generate a batch of translations."""
+        enable_sample = self.enable_sample if not enable_sample else enable_sample
         with ExitStack() as stack:
             for model in self.models:
                 stack.enter_context(model.decoder.incremental_inference())
-            return self._generate(src_tokens, src_positions, beam_size, maxlen)
-
-    def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None):
+            
+            return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample=enable_sample)
+            '''
+            if enable_sample:
+                return self.sample(src_tokens, src_positions, beam_size, maxlen)
+            else:
+                return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample=enable_sample)
+            '''
+    def sample(self, src_tokens, src_positions, beam_size=None, maxlen=None):
         bsz = src_tokens.size(0)
         beam_size = beam_size if beam_size is not None else self.beam_size
         maxlen = min(maxlen, self.maxlen) if maxlen is not None else self.maxlen
+        minlen = self.minlen
+    
+        assert beam_size == 1
+        encoder_outs = []
+        for model in self.models:
+            model.eval()
+            model.decoder.start_fresh_sequence(beam_size)  # start a fresh sequence
+    
+            # compute the encoder output and expand to beam size
+            encoder_out = model.encoder(src_tokens, src_positions)
+            encoder_out = self._expand_encoder_out(encoder_out, beam_size)
+            encoder_outs.append(encoder_out)
+    
+        # initialize buffers
+        tokens = src_tokens.data.new(bsz * beam_size, maxlen + 2).fill_(self.pad)
+        tokens[:, 0] = self.eos
+        seq_log_probs = Variable(encoder_outs[0][0].data.new(bsz * beam_size, maxlen + 1).fill_(0))
+        unfinished = torch.Tensor(bsz * beam_size).fill_(1).byte().cuda()
+    
+        # list of finalized sentences
+        finalized = [[] for i in range(bsz)]
+        # number of candidate hypos per step
+        cand_size = 1
+    
+        # helper function for allocating buffers on the fly
+        buffers = {}
+        def buffer(name, type_of=tokens):
+            if name not in buffers:
+                buffers[name] = type_of.new()
+            return buffers[name]
+        
+        for step in range(maxlen + 1):  # one extra step for EOS marker
+            probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs, enable_sample=True)
+    
+            if step == 0:
+                # at the first step all hypotheses are equally likely, so use
+                # only the first beam
+                probs = probs.unfold(0, 1, beam_size).squeeze(2).contiguous()
+                
+            probs[:, self.pad] = -math.inf # never select pad
+            
+            cand_indices = buffer('cand_indices')
+            
+            torch.multinomial(probs.view(bsz, -1).data.exp(), cand_size, replacement=True, out=cand_indices)
+            sampled_log_prob = probs.gather(1, Variable(cand_indices, requires_grad=False))
+            cand_indices = cand_indices.view(-1)
+            if step >= minlen:
+                unfinished = unfinished * cand_indices.ne(self.eos)
+                if unfinished.sum() == 0:
+                    break
+            cand_indices = cand_indices * unfinished.type_as(cand_indices) + self.pad*(~unfinished).type_as(cand_indices)
+            tokens[:, step+1] = cand_indices
+            seq_log_probs[:, step] = sampled_log_prob.view(-1) * Variable(unfinished.float(), requires_grad=False)
+            
+        for i in range(bsz):
+            finalized[i].append(
+                    {
+                        'tokens': tokens[i, 1:],
+                        'log_prob': seq_log_probs[i, :],
+                        'alignment': [0],
+                        'score': 0,
+                        'attention': 0,
+                        'sum_log_prob': torch.sum(seq_log_probs[i, :])
+                    })
+            
+        return finalized
+    
+    def _generate(self, src_tokens, src_positions, beam_size=None, maxlen=None, enable_sample=None):
+        enable_sample = self.enable_sample if not enable_sample else enable_sample
+        # the max beam size is the dictionary size - 1, since we never select pad
+        beam_size = beam_size if beam_size is not None else self.beam_size
+        beam_size = min(beam_size, self.vocab_size - 1)
+        
+        if enable_sample:
+            assert beam_size == 1, 'in sample mode, beam_size must be 1'
+        bsz = src_tokens.size(0)
+        maxlen = min(maxlen, self.maxlen) if maxlen is not None else self.maxlen
+
+        # the max beam size is the dictionary size - 1, since we never select pad
+        beam_size = beam_size if beam_size is not None else self.beam_size
+        beam_size = min(beam_size, self.vocab_size - 1)
 
         encoder_outs = []
         for model in self.models:
             model.eval()
-            model.decoder.clear_incremental_state()  # start a fresh sequence
+            model.decoder.start_fresh_sequence(beam_size)  # start a fresh sequence
+
 
             # compute the encoder output and expand to beam size
             encoder_out = model.encoder(src_tokens, src_positions)
@@ -102,12 +202,18 @@ class SequenceGenerator(object):
             encoder_outs.append(encoder_out)
 
         # initialize buffers
-        scores = encoder_outs[0][0].data.new(bsz * beam_size).fill_(0)
+        if not enable_sample:
+            scores = encoder_outs[0][0].data.new(bsz * beam_size).fill_(0)
+        else:
+            scores = Variable(encoder_outs[0][0].data.new(bsz * beam_size).fill_(0))
         tokens = src_tokens.data.new(bsz * beam_size, maxlen + 2).fill_(self.pad)
         tokens_buf = tokens.clone()
         tokens[:, 0] = self.eos
-        align = src_tokens.data.new(bsz * beam_size, maxlen + 2).fill_(-1)
-        align_buf = align.clone()
+        if not enable_sample:
+            attn = scores.new(bsz * beam_size, src_tokens.size(1), maxlen + 2)
+        else:
+            attn = scores.data.new(bsz * beam_size, src_tokens.size(1), maxlen + 2)
+        attn_buf = attn.clone()
 
         # list of completed sentences
         finalized = [[] for i in range(bsz)]
@@ -124,7 +230,8 @@ class SequenceGenerator(object):
 
         # helper function for allocating buffers on the fly
         buffers = {}
-        def buffer(name, type_of=tokens):
+
+        def buffer(name, type_of=tokens):  # noqa
             if name not in buffers:
                 buffers[name] = type_of.new()
             return buffers[name]
@@ -143,6 +250,10 @@ class SequenceGenerator(object):
                 # finalized one
                 bbsz = sent*beam_size
                 best_unfinalized_score = scores[bbsz:bbsz+beam_size].max()
+
+                if enable_sample:
+                    best_unfinalized_score = best_unfinalized_score.data
+
                 if self.normalize_scores:
                     best_unfinalized_score /= maxlen
                 if worst_finalized[sent]['score'] >= best_unfinalized_score:
@@ -166,20 +277,27 @@ class SequenceGenerator(object):
                     for each hypothesis
             """
             assert bbsz_idx.numel() == scores.numel()
+
+            sum_log_probs = scores
+            if enable_sample:
+                scores = scores.data
             norm_scores = scores/math.pow(step+1, self.len_penalty) if self.normalize_scores else scores
             sents_seen = set()
-            for idx, score in zip(bbsz_idx.cpu(), norm_scores.cpu()):
+            for idx, score, sum_log_prob in zip(bbsz_idx.cpu(), norm_scores.cpu(), sum_log_probs):
                 sent = idx // beam_size
                 sents_seen.add(sent)
 
                 def get_hypo():
-                    hypo = tokens[idx, 1:step+2].clone()
+                    hypo = tokens[idx, 1:step+2].clone()  # skip the first index, which is EOS
                     hypo[step] = self.eos
-                    alignment = align[idx, 1:step+2].clone()
+                    attention = attn[idx, :, 1:step+2].clone()
+                    _, alignment = attention.max(dim=0)
                     return {
                         'tokens': hypo,
                         'score': score,
+                        'attention': attention,
                         'alignment': alignment,
+                        'sum_log_prob': sum_log_prob
                     }
 
                 if len(finalized[sent]) < beam_size:
@@ -208,33 +326,50 @@ class SequenceGenerator(object):
         reorder_state = None
         for step in range(maxlen + 1):  # one extra step for EOS marker
             # reorder decoder internal states based on the prev choice of beams
-            print("step:"+str(step))
             if reorder_state is not None:
                 for model in self.models:
-                    model.decoder.reorder_incremental_state(reorder_state)
+                    model.decoder.reorder_incremental_state(reorder_state, enable_sample) # enable_bp = enable_sample
 
-            probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)
-            ##print("probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs)   probs size:"+str(probs.size()))
+            probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs, enable_sample=enable_sample)
+            if enable_sample:
+                probs_ = probs.data
+
             if step == 0:
                 # at the first step all hypotheses are equally likely, so use
                 # only the first beam
                 probs = probs.unfold(0, 1, beam_size).squeeze(2).contiguous()
+                if enable_sample:
+                    probs_ = probs_.unfold(0, 1, beam_size).squeeze(2).contiguous()
             else:
                 # make probs contain cumulative scores for each hypothesis
-                probs.add_(scores.view(-1, 1))
+                if enable_sample:
+                    probs = torch.add(probs, scores.view(-1, 1))
+                else:
+                    probs.add_(scores.view(-1, 1))
+            probs[:, self.pad] = -math.inf  # never select pad
+            if enable_sample:
+                probs_[:, self.pad] = -math.inf
 
-            # record alignment to source tokens, based on attention
-            _ignore_scores = buffer('_ignore_scores', type_of=scores)
-            avg_attn_scores.topk(1, out=(_ignore_scores, align[:, step+1].unsqueeze(1)))
-
+            # Record attention scores
+            if enable_sample:
+                attn[:, :, step+1].copy_(avg_attn_scores.data)
+            else:
+                attn[:, :, step+1].copy_(avg_attn_scores)
             # take the best 2 x beam_size predictions. We'll choose the first
             # beam_size of these which don't predict eos to continue with.
-            cand_scores = buffer('cand_scores', type_of=scores)
+            cand_scores = buffer('cand_scores', type_of=attn) # attn has the same type as scores.data
             cand_indices = buffer('cand_indices')
             cand_beams = buffer('cand_beams')
-            ##print("probs size view before:"+str(probs.size()))
-            probs.view(bsz, -1).topk(cand_size, out=(cand_scores, cand_indices))
-            ##print("probs size:"+str(probs.size()))
+            if not enable_sample:
+                probs.view(bsz, -1).topk(
+                    min(cand_size, probs.view(bsz, -1).size(1) - 1),  # -1 so we never select pad
+                    out=(cand_scores, cand_indices))
+            else:
+                cand_indices = torch.multinomial(probs_.view(bsz, -1).exp(), 
+                    min(cand_size, probs_.view(bsz, -1).size(1) - 1), 
+                    replacement=True)
+                cand_scores = torch.gather(probs.view(bsz, -1), 1, Variable(cand_indices, requires_grad=False))
+
             torch.div(cand_indices, self.vocab_size, out=cand_beams)
             cand_indices.fmod_(self.vocab_size)
 
@@ -249,8 +384,13 @@ class SequenceGenerator(object):
                 eos_bbsz_idx = buffer('eos_bbsz_idx')
                 cand_bbsz_idx.masked_select(eos_mask, out=eos_bbsz_idx)
                 if eos_bbsz_idx.numel() > 0:
-                    eos_scores = buffer('eos_scores', type_of=scores)
-                    cand_scores.masked_select(eos_mask, out=eos_scores)
+
+                    eos_scores = buffer('eos_scores', type_of=attn)
+                    if not enable_sample:
+                        cand_scores.masked_select(eos_mask, out=eos_scores)
+                    else:
+                        eos_scores = torch.masked_select(cand_scores, Variable(eos_mask, requires_grad=False))
+
                     num_remaining_sent -= finalize_hypos(step, eos_bbsz_idx, eos_scores)
 
             assert num_remaining_sent >= 0
@@ -261,7 +401,8 @@ class SequenceGenerator(object):
             # and values < cand_size indicate candidate active hypos.
             # After, the min values per row are the top candidate active hypos
             active_mask = buffer('active_mask')
-            torch.add((eos_mask*cand_size).type_as(cand_offsets), cand_offsets,
+
+            torch.add((eos_mask*cand_size).type_as(cand_offsets), cand_offsets[:eos_mask.size(1)],
                       out=active_mask)
 
             # get the top beam_size active hypotheses, which are just the hypos
@@ -270,8 +411,15 @@ class SequenceGenerator(object):
             active_mask.topk(beam_size, 1, largest=False, out=(_ignore, active_hypos))
             active_bbsz_idx = buffer('active_bbsz_idx')
             cand_bbsz_idx.gather(1, active_hypos, out=active_bbsz_idx)
-            active_scores = cand_scores.gather(1, active_hypos,
-                                               out=scores.view(bsz, beam_size))
+
+            if not enable_sample:
+                active_scores = cand_scores.gather(1, active_hypos,
+                                                   out=scores.view(bsz, beam_size))
+            else:
+                active_scores = cand_scores.gather(1, Variable(active_hypos, requires_grad=False))
+                scores = scores.view(bsz, beam_size)
+                scores = cand_scores.gather(1, Variable(active_hypos, requires_grad=False))
+                scores = scores.view(-1)
 
             active_bbsz_idx = active_bbsz_idx.view(-1)
             active_scores = active_scores.view(-1)
@@ -289,17 +437,18 @@ class SequenceGenerator(object):
             cand_indices.gather(1, active_hypos,
                                 out=tokens_buf.view(bsz, beam_size, -1)[:, :, step+1])
 
-            # copy attention/alignment for active hypotheses
-            torch.index_select(align[:, :step+2], dim=0, index=active_bbsz_idx,
-                               out=align_buf[:, :step+2])
+            # copy attention for active hypotheses
+            torch.index_select(attn[:, :, :step+2], dim=0, index=active_bbsz_idx,
+                               out=attn_buf[:, :, :step+2])
 
             # swap buffers
             old_tokens = tokens
             tokens = tokens_buf
             tokens_buf = old_tokens
-            old_align = align
-            align = align_buf
-            align_buf = old_align
+
+            old_attn = attn
+            attn = attn_buf
+            attn_buf = old_attn
 
             # reorder incremental state in decoder
             reorder_state = active_bbsz_idx
@@ -310,42 +459,61 @@ class SequenceGenerator(object):
 
         return finalized
 
-    def _decode(self, tokens, encoder_outs):
+
+    def _decode(self, tokens, encoder_outs, enable_sample=None):
+        enable_sample = self.enable_sample if not enable_sample else enable_sample
+        enable_bp = enable_sample
         length = tokens.size(1)
 
         # repeat the first length positions to fill batch
         positions = self.positions[:length].view(1, length)
 
         # wrap in Variables
-        tokens = Variable(tokens, volatile=True)
-        positions = Variable(positions, volatile=True)
+
+        tokens = Variable(tokens, volatile=not enable_sample)
+        positions = Variable(positions, volatile=not enable_sample)
 
         avg_probs = None
         avg_attn = None
         for model, encoder_out in zip(self.models, encoder_outs):
+
             ###decoder_out, attn = model.decoder(tokens, positions, encoder_out)
             ###probs = F.softmax(decoder_out[:, -1, :]).data
             if self.enable_topic :
-                x, x_topic, attn_scores, attn_scores_topic, topic_words_mask= model.decoder(tokens, positions, encoder_out)
+                x, x_topic, attn_scores, attn_scores_topic, topic_words_mask= model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)
                 logits_exp = torch.exp(x) + torch.exp(x_topic) * torch.autograd.Variable(topic_words_mask.expand(x_topic.size(0), x_topic.size(1), topic_words_mask.size(0)), requires_grad=False)
                 print("logits_exp.size():"+str(logits_exp.size()))
                 probs =( logits_exp.view(-1,logits_exp.size(-1)) / torch.sum(logits_exp,-1).view(logits_exp.size(0), 1).expand(logits_exp.size(0), logits_exp.size(1)) ).data
                 print("probs:"+str(probs))
                 attn = (attn_scores[:, -1, :]+attn_scores_topic[:, -1, :]).data
             else:
-                decoder_out, attn = model.decoder(tokens, positions, encoder_out)
+                decoder_out, attn = model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)
+                
+            if not enable_sample:
                 probs = F.softmax(decoder_out[:, -1, :]).data
                 attn = attn[:, -1, :].data
-                
+            else:
+                probs = F.softmax(decoder_out[:, -1, :])
+                attn = attn[:, -1, :]
+
             if avg_probs is None or avg_attn is None:
                 avg_probs = probs
                 avg_attn = attn
             else:
-                avg_probs.add_(probs)
-                avg_attn.add_(attn)
-        avg_probs.div_(len(self.models))
-        avg_probs.log_()
-        avg_attn.div_(len(self.models))
+                if not enable_sample:
+                    avg_probs.add_(probs)
+                    avg_attn.add_(attn)
+                else:
+                    avg_probs = torch.add(avg_probs, probs)
+                    avg_attn = torch.add(avg_attn, attn)
+        if not enable_sample:
+            avg_probs.div_(len(self.models))
+            avg_probs.log_()
+            avg_attn.div_(len(self.models))
+        else:
+            avg_probs = torch.div(avg_probs, len(self.models))
+            avg_probs = torch.log(avg_probs)
+            avg_attn = torch.div(avg_attn, len(self.models))
 
         return avg_probs, avg_attn
 

@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from .fairseq_criterion import FairseqCriterion
 
 import torch
-
+from .utils import aggregate
 
 class CrossEntropyCriterion(FairseqCriterion):
 
@@ -24,10 +24,18 @@ class CrossEntropyCriterion(FairseqCriterion):
     def prepare(self, samples):
         self.denom = sum(s['ntokens'] if s else 0 for s in samples)
 
-    def forward(self, net_output, sample):
+    def forward(self, model, sample):
+        """Compute the loss for the given sample.
+
+        Returns a tuple with three elements:
+        1) the loss, as a Variable
+        2) the sample size, which is used as the denominator for the gradient
+        3) logging outputs to display while training
+        """
         ###print("net_output.size():"+str(net_output.size())) ###net_output.size():torch.Size([1296, 8789])
         
         target = sample['target'].view(-1)  ###CrossEntropyCriterion target:1296
+        net_output = model(**sample['net_input'])
         
         if self.enable_topic :
             ###net_output_ = net_output[0] + net_output[1]
@@ -43,7 +51,24 @@ class CrossEntropyCriterion(FairseqCriterion):
             input = net_output.view(-1, net_output.size(-1)) ###no softmax yet  1296x8789
             loss = F.cross_entropy(input, target, size_average=False, ignore_index=self.padding_idx)   ###self.padding_idx:1
 
-        return loss / self.denom
+        sample_size = sample['ntokens']
+        logging_output = {
+            'loss': loss.data[0],
+            'sample_size': sample_size,
+        }
+        return loss, sample_size, logging_output
+        #return loss / self.denom
 
     def aggregate(self, losses):
         return sum(losses) / math.log(2)
+
+    @staticmethod
+    def aggregate_logging_outputs(logging_outputs):
+        """Aggregate logging outputs from data parallel training."""
+        sample_size = sum(log.get('sample_size', 0) for log in logging_outputs)
+        return {
+            'loss': aggregate(logging_outputs, 'loss', default=0, avg=False) / sample_size / math.log(2),
+            'mean_rouge_greedy': aggregate(logging_outputs, 'mean_rouge_greedy', default=0, avg=True),
+            'mean_rouge_sampled': aggregate(logging_outputs, 'mean_rouge_sampled', default=0, avg=True),
+            'mean_sum_log_prob': aggregate(logging_outputs, 'mean_sum_log_prob', default=0, avg=True),
+        }

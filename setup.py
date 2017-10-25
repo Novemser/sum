@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright (c) 2017-present, Facebook, Inc.
 # All rights reserved.
 #
@@ -38,8 +40,10 @@ conv_tbc = create_extension(
     relative_to='fairseq',
     headers=['fairseq/clib/temporal_convolution_tbc/temporal_convolution_tbc.h'],
     sources=['fairseq/clib/temporal_convolution_tbc/temporal_convolution_tbc.cpp'],
-    #define_macros=[('WITH_CUDA', None)],
-    #with_cuda=True,
+
+    define_macros=[('WITH_CUDA', None)],
+    with_cuda=True,
+
     extra_compile_args=['-std=c++11'],
 )
 

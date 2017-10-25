@@ -17,38 +17,40 @@ from fairseq.dictionary import Dictionary
 from fairseq.indexed_dataset import IndexedDataset, IndexedInMemoryDataset
 
 
-def load_with_check(path, src=None, dst=None):
-    """Loads the train, valid, and test sets from the specified folder
-    and check that training files exist."""
+def load_with_check(path, load_splits, src=None, dst=None):
+    """Loads specified data splits (e.g., test, train or valid) from the
+    specified folder and check that files exist."""
 
     def find_language_pair(files):
-        for filename in files:
-            parts = filename.split('.')
-            if parts[0] == 'train' and parts[-1] == 'idx':
-                return parts[1].split('-')
+        for split in load_splits:
+            for filename in files:
+                parts = filename.split('.')
+                if parts[0] == split and parts[-1] == 'idx':
+                    return parts[1].split('-')
 
-    def train_file_exists(src, dst):
-        filename = 'train.{0}-{1}.{0}.idx'.format(src, dst)
+    def split_exists(split, src, dst):
+        filename = '{0}.{1}-{2}.{1}.idx'.format(split, src, dst)
         return os.path.exists(os.path.join(path, filename))
 
     if src is None and dst is None:
         # find language pair automatically
         src, dst = find_language_pair(os.listdir(path))
-    elif train_file_exists(src, dst):
-        # check for src-dst langcode
-        pass
-    elif train_file_exists(dst, src):
-        # check for dst-src langcode
-        src, dst = dst, src
-    else:
-        raise ValueError('training file not found for {}-{}'.format(src, dst))
 
-    dataset = load(path, src, dst)
+    if not split_exists(load_splits[0], src, dst):
+        # try reversing src and dst
+        src, dst = dst, src
+
+    for split in load_splits:
+        if not split_exists(load_splits[0], src, dst):
+            raise ValueError('Data split not found: {}-{} ({})'.format(
+                src, dst, split))
+
+    dataset = load(path, load_splits, src, dst)
     return dataset
 
 
-def load(path, src, dst):
-    """Loads the train, valid, and test sets from the specified folder."""
+def load(path, load_splits, src, dst):
+    """Loads specified data splits (e.g. test, train or valid) from the path."""
 
     langcode = '{}-{}'.format(src, dst)
 
@@ -59,21 +61,21 @@ def load(path, src, dst):
     dst_dict = Dictionary.load(fmt_path('dict.{}.txt', dst))
     dataset = LanguageDatasets(src, dst, src_dict, dst_dict)
 
-    for split in ['train', 'valid', 'test']:
+    for split in load_splits:
         for k in itertools.count():
             prefix = "{}{}".format(split, k if k > 0 else '')
             src_path = fmt_path('{}.{}.{}', prefix, langcode, src)
 
             if not IndexedInMemoryDataset.exists(src_path):
                 break
-            
-            print("dataset.src_dict.pad():"+str(dataset.src_dict.pad()))
 
             dataset.splits[prefix] = LanguagePairDataset(
                 IndexedInMemoryDataset(src_path),
                 IndexedInMemoryDataset(fmt_path('{}.{}.{}', prefix, langcode, dst)),
-                padding_value=dataset.src_dict.pad(),
-                eos=dataset.src_dict.eos(),
+
+                pad_idx=dataset.src_dict.pad(),
+                eos_idx=dataset.src_dict.eos(),
+
             )
 
     return dataset
@@ -87,9 +89,14 @@ class LanguageDatasets(object):
         self.dst_dict = dst_dict
         self.splits = {}
 
+        assert self.src_dict.pad() == self.dst_dict.pad()
+        assert self.src_dict.eos() == self.dst_dict.eos()
+        assert self.src_dict.unk() == self.dst_dict.unk()
+
     def dataloader(self, split, batch_size=1, num_workers=0,
                    max_tokens=None, seed=None, epoch=1,
-                   sample_without_replacement=0, max_positions=1024):
+                   sample_without_replacement=0, max_positions=1024,
+                   skip_invalid_size_inputs_valid_test=False):
         dataset = self.splits[split]
         if split.startswith('train'):
             with numpy_seed(seed):
@@ -100,15 +107,20 @@ class LanguageDatasets(object):
                     max_positions=max_positions)
         elif split.startswith('valid'):
             batch_sampler = list(batches_by_size(dataset.src, batch_size, max_tokens, dst=dataset.dst,
-                                                 max_positions=max_positions))
+                                                 max_positions=max_positions,
+                                                 ignore_invalid_inputs=skip_invalid_size_inputs_valid_test))
         else:
-            batch_sampler = list(batches_by_size(dataset.src, batch_size, max_tokens, max_positions=max_positions))
+            batch_sampler = list(batches_by_size(dataset.src, batch_size, max_tokens, max_positions=max_positions,
+                                                 ignore_invalid_inputs=skip_invalid_size_inputs_valid_test))
 
         return torch.utils.data.DataLoader(
             dataset,
             num_workers=num_workers,
-            collate_fn=PaddingCollater(self.src_dict.pad()),
-            batch_sampler=batch_sampler)
+
+            collate_fn=dataset.collater,
+            batch_sampler=batch_sampler,
+        )
+
 
 
 def skip_group_enumerator(it, ngpus, offset=0):
@@ -125,70 +137,86 @@ def skip_group_enumerator(it, ngpus, offset=0):
     if len(res) > 0:
         yield (idx, res)
 
-
-class PaddingCollater(object):
-    def __init__(self, padding_value=1):
-        self.padding_value = padding_value
-
-    def __call__(self, samples):
-        def merge(key, pad_begin):
-            return self.merge_with_pad([s[key] for s in samples], pad_begin)
-
-        ntokens = sum(len(s['target']) for s in samples)
-
-        return {
-            'id': torch.LongTensor([s['id'].item() for s in samples]),
-            'input_tokens': merge('input_tokens', pad_begin=True),
-            'input_positions': merge('input_positions', pad_begin=True),
-            'target': merge('target', pad_begin=True),
-            'src_tokens': merge('src_tokens', pad_begin=False),
-            'src_positions': merge('src_positions', pad_begin=False),
-            'ntokens': ntokens,
-        }
-
-    def merge_with_pad(self, values, pad_begin):
-        size = max(v.size(0) for v in values)
-        res = values[0].new(len(values), size).fill_(self.padding_value)
-        for i, v in enumerate(values):
-            if pad_begin:
-                res[i][size-len(v):].copy_(v)
-            else:
-                res[i][:len(v)].copy_(v)
-        return res
-
-
 class LanguagePairDataset(object):
-    def __init__(self, src, dst, padding_value=1, eos=2):
+    def __init__(self, src, dst, pad_idx, eos_idx):
         self.src = src
         self.dst = dst
-        self.padding_value = padding_value
-        self.eos = eos
+        self.pad_idx = pad_idx
+        self.eos_idx = eos_idx
 
     def __getitem__(self, i):
-        src = self.src[i].long() - 1
+        # subtract 1 for 0-based indexing
+        source = self.src[i].long() - 1
         target = self.dst[i].long() - 1
-        input = target.new(target.size())
-        input[0] = self.eos
-        input[1:].copy_(target[:-1])
-
         return {
             'id': i,
-            'input_tokens': input,
-            'input_positions': self.make_positions(input),
+            'source': source,
             'target': target,
-            'src_tokens': src,
-            'src_positions': self.make_positions(src),
         }
-
-    def make_positions(self, x):
-        start = self.padding_value + 1
-        return torch.arange(start, start + len(x)).type_as(x)
 
     def __len__(self):
         return len(self.src)
 
+    def collater(self, samples):
+        return LanguagePairDataset.collate(samples, self.pad_idx, self.eos_idx)
 
-def batches_by_size(src, batch_size=None, max_tokens=None, dst=None, max_positions=1024):
+    @staticmethod
+    def collate(samples, pad_idx, eos_idx):
+
+        def merge(key, left_pad, move_eos_to_beginning=False):
+            return LanguagePairDataset.collate_tokens(
+                [s[key] for s in samples], pad_idx, eos_idx, left_pad, move_eos_to_beginning)
+
+        def merge_positions(key, left_pad):
+            return LanguagePairDataset.collate_positions([s[key] for s in samples], pad_idx, left_pad)
+
+        ntokens = sum(len(s['target']) for s in samples)
+        return {
+            'id': torch.LongTensor([s['id'].item() for s in samples]),
+            'input_tokens': merge('target', left_pad=True, move_eos_to_beginning=True),
+            'input_positions': merge_positions('target', left_pad=True),
+            'target': merge('target', left_pad=True),
+            'src_tokens': merge('source', left_pad=False),
+            'src_positions': merge_positions('source', left_pad=False),
+            'ntokens': ntokens,
+        }
+
+    @staticmethod
+    def collate_tokens(values, pad_idx, eos_idx, left_pad, move_eos_to_beginning):
+        size = max(v.size(0) for v in values)
+        res = values[0].new(len(values), size).fill_(pad_idx)
+
+        def copy_tensor(src, dst):
+            assert dst.numel() == src.numel()
+            if move_eos_to_beginning:
+                assert src[-1] == eos_idx
+                dst[0] = eos_idx
+                dst[1:] = src[:-1]
+            else:
+                dst.copy_(src)
+
+        for i, v in enumerate(values):
+            if left_pad:
+                copy_tensor(v, res[i][size-len(v):])
+            else:
+                copy_tensor(v, res[i][:len(v)])
+        return res
+
+    @staticmethod
+    def collate_positions(values, pad_idx, left_pad):
+        start = pad_idx + 1
+        size = max(v.size(0) for v in values)
+        res = values[0].new(len(values), size).fill_(pad_idx)
+        for i, v in enumerate(values):
+            if left_pad:
+                torch.arange(start, start + len(v), out=res[i][size-len(v):])
+            else:
+                torch.arange(start, start + len(v), out=res[i][:len(v)])
+        return res
+
+
+def batches_by_size(src, batch_size=None, max_tokens=None, dst=None,
+                    max_positions=1024, ignore_invalid_inputs=False):
     """Returns batches of indices sorted by size. Sequences of different lengths
     are not allowed in the same batch."""
     assert isinstance(src, IndexedDataset)
@@ -214,14 +242,22 @@ def batches_by_size(src, batch_size=None, max_tokens=None, dst=None, max_positio
         return False
 
     cur_max_size = 0
+
+    ignored = []
+
     for idx in indices:
         # - 2 here stems from make_positions() where we offset positions
         # by padding_value + 1
         if src.sizes[idx] < 2 or \
-                (dst is not None and dst.sizes[idx] < 2) or \
+                (False if dst is None else dst.sizes[idx] < 2) or \
                 sizes[idx] > max_positions - 2:
+            if ignore_invalid_inputs:
+                ignored.append(idx)
+                continue
+
             raise Exception("Unable to handle input id {} of "
-                            "size {} / {}.".format(idx, src.sizes[idx], dst.sizes[idx]))
+                            "size {} / {}.".format(idx, src.sizes[idx],
+                                                   "none" if dst is None else dst.sizes[idx]))
 
         if yield_batch(idx, cur_max_size * (len(batch) + 1)):
             yield batch
@@ -229,6 +265,11 @@ def batches_by_size(src, batch_size=None, max_tokens=None, dst=None, max_positio
             cur_max_size = 0
         batch.append(idx)
         cur_max_size = max(cur_max_size, sizes[idx])
+
+
+    if len(ignored) > 0:
+        print("Warning! {} samples are either too short or too long "
+              "and will be ignored, sample ids={}".format(len(ignored), ignored))
 
     if len(batch) > 0:
         yield batch
@@ -293,7 +334,7 @@ def shuffled_batches_by_size(src, dst, max_tokens=None, epoch=1, sample=0, max_p
 
         batches = result
     else:
-        for i in range(epoch - 1):
+        for _ in range(epoch - 1):
             np.random.shuffle(batches)
 
     return batches

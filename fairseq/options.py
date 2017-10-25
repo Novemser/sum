@@ -9,6 +9,7 @@
 import argparse
 
 from fairseq import models
+from fairseq.multiprocessing_trainer import MultiprocessingTrainer
 
 
 def get_parser(desc):
@@ -19,6 +20,8 @@ def get_parser(desc):
                         help='log progress every N updates (when progress bar is disabled)')
     parser.add_argument('--seed', default=1, type=int, metavar='N',
                         help='pseudo random number generator seed')
+    parser.add_argument('--cuda-visible-devices', type=str, default='1',
+                        help='select gpu devices to use')
     return parser
 
 
@@ -34,14 +37,19 @@ def add_dataset_args(parser):
                        help='number of data loading workers (default: 1)')
     group.add_argument('--max-positions', default=1024, type=int, metavar='N',
                        help='max number of tokens in the sequence')
+    group.add_argument('--skip-invalid-size-inputs-valid-test', action='store_true',
+                       help='Ignore too long or too short lines in valid and test set')
     return group
 
 
 def add_optimization_args(parser):
     group = parser.add_argument_group('Optimization')
+    group.add_argument('--optimizer', default='nag', metavar='OPT',
+                       choices=MultiprocessingTrainer.OPTIMIZERS,
+                       help='optimizer ({})'.format(', '.join(MultiprocessingTrainer.OPTIMIZERS)))
     group.add_argument('--lr', '--learning-rate', default=0.25, type=float, metavar='LR',
                        help='initial learning rate')
-    group.add_argument('--min-lr', metavar='LR', default=1e-5, type=float,
+    group.add_argument('--min-lr', metavar='LR', default=1e-6, type=float,
                        help='minimum learning rate')
     group.add_argument('--force-anneal', '--fa', default=0, type=int, metavar='N',
                        help='force annealing at specified epoch')
@@ -51,6 +59,8 @@ def add_optimization_args(parser):
                        help='learning rate shrink factor for annealing, lr_new = (lr * lrshrink)')
     group.add_argument('--momentum', default=0.99, type=float, metavar='M',
                        help='momentum factor')
+    group.add_argument('--adam-betas', default='(0.9, 0.999)', metavar='B',
+                       help='betas for Adam optimizer')
     group.add_argument('--clip-norm', default=25, type=float, metavar='NORM',
                        help='clip threshold of gradients')
     group.add_argument('--weight-decay', '--wd', default=0.0, type=float, metavar='WD',
@@ -59,8 +69,12 @@ def add_optimization_args(parser):
                        help='If bigger than 0, use that number of mini-batches for each epoch,'
                             ' where each sample is drawn randomly with replacement from the'
                             ' dataset')
-    ###group.add_argument('-enable_topic', action='store_true',
-    ###                   help='enable reinforcement learning')
+    group.add_argument('-hardset_lr', action='store_true',
+                      help='hard set learning rate to the one given by --lr instead of that of checkpoint')
+    group.add_argument('-enable_rl', action='store_true',
+                       help='enable reinforcement learning')
+    group.add_argument('--loss_scale', default=0.99, type=float,
+                       help='scaling factor for the difference in magnitude between rl_loss and ml_loss')
     return group
 
 
@@ -85,13 +99,13 @@ def add_generation_args(parser):
                        help='beam size')
     group.add_argument('--nbest', default=1, type=int, metavar='N',
                        help='number of hypotheses to output')
-    group.add_argument('--max-len-a', default=0, type=int, metavar='N',
-                       help=('generate sequence of maximum length ax + b, '
+    group.add_argument('--max-len-a', default=0, type=float, metavar='N',
+                       help=('generate sequences of maximum length ax + b, '
                              'where x is the source length'))
     group.add_argument('--max-len-b', default=200, type=int, metavar='N',
-                       help=('generate sequence of maximum length ax + b, '
+                       help=('generate sequences of maximum length ax + b, '
                              'where x is the source length'))
-    group.add_argument('--remove-bpe', action='store_true',
+    group.add_argument('--remove-bpe', nargs='?', const='@@ ', default=None,
                        help='remove BPE tokens before scoring')
     group.add_argument('--no-early-stop', action='store_true',
                        help=('continue searching even after finalizing k=beam '
@@ -108,6 +122,12 @@ def add_generation_args(parser):
                        help='performs unk word replacement')
     group.add_argument('-enable_topic', action='store_true',
                        help='enable reinforcement learning')
+    group.add_argument('--quiet', action='store_true',
+                       help='Only print final scores')
+    group.add_argument('-enable_sample', action='store_true',
+                      help='decode in sample mode')
+    group.add_argument('--minlen', default=1, type=int, metavar='N',
+                       help=('generate sequence of min length'))
     return group
 
 
