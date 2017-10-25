@@ -636,7 +636,7 @@ class Decoder(nn.Module):
         for proj_topic, conv_topic, attention_topic in zip(self.projections_topic, self.convolutions_topic, self.attention_topic):
             residual_topic = x_topic if proj_topic is None else proj_topic(x_topic)
             ###print("x_topic:"+str(x_topic.size()))  ###x_topic:torch.Size([5, 1, 8789])
-            x_topic = conv_topic.incremental_forward(x_topic)
+            x_topic = conv_topic.incremental_forward(x_topic, enable_bp)
             x_topic = F.glu(x_topic)
 
             # attention

@@ -482,14 +482,16 @@ class SequenceGenerator(object):
             if self.enable_topic :
                 x, x_topic, attn_scores, attn_scores_topic, topic_words_mask= model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)
                 logits_exp = torch.exp(x) + torch.exp(x_topic) * torch.autograd.Variable(topic_words_mask.expand(x_topic.size(0), x_topic.size(1), topic_words_mask.size(0)), requires_grad=False)
+#                print("logits_exp.size():"+str(logits_exp.size()))
+
+                probs =( logits_exp.view(-1,logits_exp.size(-1)) / torch.sum(logits_exp,-1).view(logits_exp.size(0), 1).expand(logits_exp.size(0), logits_exp.size(1)) )
+                attn = (attn_scores[:, -1, :]+attn_scores_topic[:, -1, :])
                 if not enable_sample:
-                    probs =( logits_exp.view(-1,logits_exp.size(-1)) / torch.sum(logits_exp,-1).view(logits_exp.size(0), 1).expand(logits_exp.size(0), logits_exp.size(1)) ).data
-                    attn = (attn_scores[:, -1, :]+attn_scores_topic[:, -1, :]).data
-                else:
-                    probs =( logits_exp.view(-1,logits_exp.size(-1)) / torch.sum(logits_exp,-1).view(logits_exp.size(0), 1).expand(logits_exp.size(0), logits_exp.size(1)) )
-                    attn = (attn_scores[:, -1, :]+attn_scores_topic[:, -1, :])
+                    probs = probs.data
+                    attn = attn.data
+#                print("probs:"+str(probs))
             else:
-                decoder_out, attn = model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)                
+                decoder_out, attn = model.decoder(tokens, positions, encoder_out, enable_bp=enable_bp)
                 if not enable_sample:
                     probs = F.softmax(decoder_out[:, -1, :]).data
                     attn = attn[:, -1, :].data
