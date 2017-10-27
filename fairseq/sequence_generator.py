@@ -99,13 +99,13 @@ class SequenceGenerator(object):
             for model in self.models:
                 stack.enter_context(model.decoder.incremental_inference(testing=self.testing))
             
-            return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample=enable_sample)
-            '''
+#            return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample=enable_sample)
+            
             if enable_sample:
                 return self.sample(src_tokens, src_positions, beam_size, maxlen)
             else:
                 return self._generate(src_tokens, src_positions, beam_size, maxlen, enable_sample=enable_sample)
-            '''
+            
     def sample(self, src_tokens, src_positions, beam_size=None, maxlen=None):
         bsz = src_tokens.size(0)
         beam_size = beam_size if beam_size is not None else self.beam_size
@@ -126,7 +126,8 @@ class SequenceGenerator(object):
         # initialize buffers
         tokens = src_tokens.data.new(bsz * beam_size, maxlen + 2).fill_(self.pad)
         tokens[:, 0] = self.eos
-        seq_log_probs = Variable(encoder_outs[0][0].data.new(bsz * beam_size, maxlen + 1).fill_(0))
+#        seq_log_probs = Variable(encoder_outs[0][0].data.new(bsz * beam_size, maxlen + 1).fill_(0))
+        seq_log_probs = []
         unfinished = torch.Tensor(bsz * beam_size).fill_(1).byte().cuda()
     
         # list of finalized sentences
@@ -142,7 +143,7 @@ class SequenceGenerator(object):
             return buffers[name]
         
         for step in range(maxlen + 1):  # one extra step for EOS marker
-            probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs, enable_sample=enable_sample)
+            probs, avg_attn_scores = self._decode(tokens[:, :step+1], encoder_outs, enable_sample=True)
     
             if step == 0:
                 # at the first step all hypotheses are equally likely, so use
@@ -162,7 +163,18 @@ class SequenceGenerator(object):
                     break
             cand_indices = cand_indices * unfinished.type_as(cand_indices) + self.pad*(~unfinished).type_as(cand_indices)
             tokens[:, step+1] = cand_indices
-            seq_log_probs[:, step] = sampled_log_prob.view(-1) * Variable(unfinished.float(), requires_grad=False)
+            masked_log_prob = sampled_log_prob.view(-1) * Variable(unfinished.float(), requires_grad=False)
+            seq_log_probs.append(masked_log_prob.view(-1, 1))
+#            seq_log_probs[:, step] = sampled_log_prob.view(-1) * Variable(unfinished.float(), requires_grad=False)
+
+        
+        patch = encoder_outs[0][0].data.new(bsz * beam_size, 1).fill_(0)
+        while len(seq_log_probs) < maxlen:
+            seq_log_probs.append(Variable(patch))
+#        for i in seq_log_probs:
+#            print(i.size())
+        seq_log_probs = torch.stack(seq_log_probs, dim=1)
+
             
         for i in range(bsz):
             finalized[i].append(

@@ -43,15 +43,15 @@ class LinearizedConvolution(ConvTBC):
             raise RuntimeError('LinearizedConvolution only supports inference')
 
         # run forward pre hooks (e.g., weight norm)
-        # enable_bp???
-        for hook in self._forward_pre_hooks.values():
-            hook(self, input)
+        if not enable_bp:
+            for hook in self._forward_pre_hooks.values():
+                hook(self, input)
 
         kw = self.kernel_size[0]
         bsz = input.size(0)  # input: bsz x len x dim
+        # reshape weight
+        weight = self._get_linearized_weight()
         if not enable_bp:
-            # reshape weight
-            weight = self._get_linearized_weight()
             if kw > 1:
                 input = input.data
                 if self.input_buffer is None:
@@ -66,25 +66,26 @@ class LinearizedConvolution(ConvTBC):
             output = F.linear(input.view(bsz, -1), weight, self.bias)
             return output.view(bsz, 1, -1)
         else:
-            # reshape weight
-            weight = self.weight.transpose(2, 1).transpose(1, 0).contiguous()
-            assert weight.size() == (self.out_channels, kw, self.in_channels)
-            weight = weight.view(self.out_channels, -1)
+#            # reshape weight
+#            weight = self.weight.transpose(2, 1).transpose(1, 0).contiguous()
+#            assert weight.size() == (self.out_channels, kw, self.in_channels)
+#            weight = weight.view(self.out_channels, -1)
             
             if kw > 1:
                 if self.input_buffer is None:
-                    self.input_buffer = input.data.new(bsz, kw, input.size(2))
-                    self.input_buffer.zero_()
-                    self.input_buffer = torch.autograd.Variable(self.input_buffer)
-                else:
-                    # shift buffer
-                    _next_buffer = self.input_buffer[:, 1:, :].clone()
-                    self.input_buffer[:, :-1, :] = _next_buffer
-                # append next input
-                self.input_buffer[:, -1, :] = input[:, -1, :].clone()
+                    temp_buffer = input.data.new(bsz, kw - 1, input.size(2))
+                    temp_buffer.zero_()
+                    temp_buffer = torch.autograd.Variable(temp_buffer)
+                    self.input_buffer = list(torch.split(temp_buffer, 1, dim=1))
+                    self.pos = 0
+                self.input_buffer.append(input.clone())   
+                input_slice = torch.cat(self.input_buffer[self.pos:self.pos + kw], dim=1)
+                output = F.linear(input_slice.view(bsz, -1), weight, self.bias)
+                self.pos += 1
             else:
                 self.input_buffer = input.clone()
-            output = F.linear(self.input_buffer.view(bsz, -1), weight, self.bias)
+                output = F.linear(self.input_buffer.view(bsz, -1), weight, self.bias)
+
             return output.view(bsz, 1, -1)
             '''
             self.input_buffer = self.input_buffer.transpose(0, 1) # kw * bsz * dim
@@ -97,15 +98,25 @@ class LinearizedConvolution(ConvTBC):
 
     def clear_buffer(self):
         self.input_buffer = None
+        self.pos = None
 
     def reorder_buffer(self, new_order, enable_bp=False):
+        kw = self.kernel_size[0]
         if self.input_buffer is not None:
             if not enable_bp:
                 self.input_buffer = self.input_buffer.index_select(0, new_order)
             else:
-                self.input_buffer = torch.index_select(self.input_buffer, 
-                                                       0, 
-                                                       torch.autograd.Variable(new_order, requires_grad=False))
+                if kw <= 1:
+                    self.input_buffer = torch.index_select(self.input_buffer, 
+                                                           0, 
+                                                           torch.autograd.Variable(new_order, requires_grad=False))
+                else:
+                    new_order = torch.autograd.Variable(new_order, requires_grad=False)
+                    for i in range(len(self.input_buffer)):
+                        self.input_buffer[i] = torch.index_select(self.input_buffer[i], 
+                                                           0, 
+                                                           new_order)
+
 
     def _get_linearized_weight(self):
         if self._linearized_weight is None:
