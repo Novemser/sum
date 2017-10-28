@@ -217,7 +217,8 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
             ref_hypo_res.append((ref_str, greedy_hypo_str[0], 
                                  sampled_hypo_str[0], 
                                  _sum_log_probs[0],
-                                 sampled_hypo[0]['tokens'])) # beam_size = 1
+                                 sampled_hypo[0]['tokens'],
+                                 sampled_hypo[0]['seq_lens'])) # beam_size = 1
         
         return ref_hypo_res
 
@@ -266,6 +267,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         sampled_sums = [item[2] for item in ref_hypo_res]
         sum_log_probs = [item[3] for item in ref_hypo_res]
         sampled_tokens = [item[4]for item in ref_hypo_res]
+        seq_lens = ref_hypo_res[0][5].float()
 
         # evaluate rouge
         rouge_greedy = torch.Tensor([utils.evaluate([greedy_sums[i]], [refs[i]]) for i in range(len(refs))])
@@ -276,7 +278,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         mean_rouge_sampled = sum(rouge_sampled)/len(rouge_sampled)
 
         # compute mean sum log probability
-        seq_lens = torch.Tensor([seq.size()[0] for seq in sampled_tokens]).cuda()
+#        seq_lens = torch.Tensor([seq.size()[0] for seq in sampled_tokens]).cuda()
         sum_log_probs = torch.cat(sum_log_probs)
         mean_sum_log_prob = torch.sum(sum_log_probs)/torch.sum(Variable(seq_lens, requires_grad=False))
         mean_sum_log_prob = mean_sum_log_prob.data[0]

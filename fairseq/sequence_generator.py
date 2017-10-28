@@ -129,7 +129,7 @@ class SequenceGenerator(object):
 #        seq_log_probs = Variable(encoder_outs[0][0].data.new(bsz * beam_size, maxlen + 1).fill_(0))
         seq_log_probs = []
         unfinished = torch.Tensor(bsz * beam_size).fill_(1).byte().cuda()
-    
+        seq_lens = torch.LongTensor(bsz*beam_size).fill_(0).cuda()
         # list of finalized sentences
         finalized = [[] for i in range(bsz)]
         # number of candidate hypos per step
@@ -165,6 +165,7 @@ class SequenceGenerator(object):
             tokens[:, step+1] = cand_indices
             masked_log_prob = sampled_log_prob.view(-1) * Variable(unfinished.float(), requires_grad=False)
             seq_log_probs.append(masked_log_prob.view(-1, 1))
+            seq_lens = seq_lens + unfinished.long()
 #            seq_log_probs[:, step] = sampled_log_prob.view(-1) * Variable(unfinished.float(), requires_grad=False)
 
         
@@ -184,7 +185,8 @@ class SequenceGenerator(object):
                         'alignment': [0],
                         'score': 0,
                         'attention': 0,
-                        'sum_log_prob': torch.sum(seq_log_probs[i, :])
+                        'sum_log_prob': torch.sum(seq_log_probs[i, :]),
+                        'seq_lens': seq_lens
                     })
             
         return finalized
