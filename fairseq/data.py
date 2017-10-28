@@ -224,7 +224,8 @@ def batches_by_size(src, batch_size=None, max_tokens=None, dst=None,
     if max_tokens is None:
         max_tokens = float('Inf')
     sizes = src.sizes
-    indices = np.argsort(sizes, kind='mergesort')
+#    indices = np.argsort(sizes, kind='mergesort')
+    indices = np.arange(len(sizes), dtype=np.int64)
     if dst is not None:
         sizes = np.maximum(sizes, dst.sizes)
 
