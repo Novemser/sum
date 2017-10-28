@@ -6,10 +6,10 @@
 # can be found in the PATENTS file in the same directory.
 #
 
-from . import fconv
+from . import fconv, fconv_topic
 
 
-__all__ = ['fconv']
+__all__ = ['fconv', 'fconv_topic']
 
 arch_model_map = {}
 for model in __all__:

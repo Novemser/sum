@@ -18,7 +18,7 @@ from fairseq import utils
 class SequenceGenerator(object):
     def __init__(self, models, beam_size=1, minlen=1, maxlen=200,
                  stop_early=True, normalize_scores=True, len_penalty=1, 
-                 enable_topic=True, enable_sample=False, testing=True):
+                 enable_topic=False, enable_sample=False, testing=True):
         """Generates translations of a given source sentence.
 
         Args:

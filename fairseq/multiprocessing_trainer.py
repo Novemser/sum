@@ -104,7 +104,7 @@ class MultiprocessingTrainer(MultiprocessingEventLoop):
         self.generator = SequenceGenerator(models, beam_size=1, minlen=args.minlen, 
             maxlen=args.max_len_b, stop_early=(not args.no_early_stop), 
             normalize_scores=(not args.unnormalized), len_penalty=args.lenpen,
-            testing=False).cuda()
+            testing=False, enable_topic=args.enable_topic).cuda()
         
     def _build_optimizer(self):
         if self.args.optimizer == 'adagrad':

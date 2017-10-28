@@ -22,6 +22,8 @@ from fairseq.rouge import rouge
 
 def parse_args_and_arch(parser):
     args = parser.parse_args()
+    if args.enable_topic:
+        assert 'topic' in args.arch, 'arch must be topic arch if topic enabled: add topic to fconv, e.g., fconv_topic'
     args.model = models.arch_model_map[args.arch]
     args = getattr(models, args.model).parse_arch(args)
     return args
@@ -142,7 +144,13 @@ def load_ensemble_for_inference(filenames, src_dict, dst_dict):
             torch.load(filename, map_location=lambda s, l: default_restore_location(s, 'cpu'))
         )
     args = states[0]['args']
-
+    
+    # back compatibility
+    if args.enable_topic and 'topic' not in args.arch:
+        arch = args.arch[0:5] + '_topic' + args.arch[5:]
+        args.arch = arch
+        args.model = args.model + '_topic'  
+    
     # build ensemble
     ensemble = []
     for state in states:
