@@ -109,13 +109,14 @@ def main():
 
         # evaluate on validate set
         for k, subset in enumerate(args.valid_subset.split(',')):
-            val_loss = validate(args, epoch, trainer, dataset, subset, num_gpus)
+            val_loss, grg = validate(args, epoch, trainer, dataset, subset, num_gpus)
+            comparator = -grg if args.use_rouge else val_loss
             if k == 0:
                 if not args.no_save:
                     # save checkpoint
-                    save_checkpoint(trainer, args, epoch, 0, val_loss)
+                    save_checkpoint(trainer, args, epoch, 0, comparator=comparator)
                 # only use first validation loss to update the learning schedule
-                lr = trainer.lr_step(val_loss, epoch)
+                lr = trainer.lr_step(comparator, epoch)
 
         epoch += 1
         batch_offset = 0
@@ -201,7 +202,7 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
                 # ignore the first mini-batch in words-per-second calculation
                 wps_meter.reset()
             if args.save_interval > 0 and (i + 1) % args.save_interval == 0:
-                save_checkpoint(trainer, args, epoch, i + 1)
+                save_checkpoint(trainer, args, epoch, i + 1, dataset=None, num_gpus=num_gpus)
 
         fmt = desc + ' | train loss {:2.2f} | train ppl {:3.2f}'.format(
             loss_meter.avg, get_perplexity(loss_meter.avg))
@@ -218,27 +219,33 @@ def train(args, epoch, batch_offset, trainer, dataset, num_gpus):
         t.write(fmt)
 
 
-def save_checkpoint(trainer, args, epoch, batch_offset, val_loss=None):
+def save_checkpoint(trainer, args, epoch, batch_offset, comparator=None, 
+                    dataset=None, num_gpus=None):
     extra_state = {
         'epoch': epoch,
         'batch_offset': batch_offset,
-        'val_loss': val_loss,
+        'val_loss': comparator, 
     }
-
+    
     if batch_offset == 0:
         if not args.no_epoch_checkpoints:
             epoch_filename = os.path.join(args.save_dir, 'checkpoint{}.pt'.format(epoch))
             trainer.save_checkpoint(epoch_filename, extra_state)
 
         # assert val_loss is not None
-        if val_loss:
-            if not hasattr(save_checkpoint, 'best') or val_loss < save_checkpoint.best:
-                save_checkpoint.best = val_loss
+        if comparator:
+            if not hasattr(save_checkpoint, 'best') or comparator < save_checkpoint.best:
+                save_checkpoint.best = comparator
                 best_filename = os.path.join(args.save_dir, 'checkpoint_best.pt')
                 trainer.save_checkpoint(best_filename, extra_state)
 
     last_filename = os.path.join(args.save_dir, 'checkpoint_last.pt')
     trainer.save_checkpoint(last_filename, extra_state)
+    
+    if dataset:
+        # evaluate on validate set
+        for k, subset in enumerate(args.valid_subset.split(',')):
+            val_loss, _ = validate(args, epoch, trainer, dataset, subset, num_gpus)
 
 
 def validate(args, epoch, trainer, dataset, subset, ngpus):
@@ -281,6 +288,7 @@ def validate(args, epoch, trainer, dataset, subset, ngpus):
             ] + extra_postfix), refresh=False)
 
         val_loss = loss_meter.avg
+        grg = grg_meter.avg
         fmt = desc + ' | valid loss {:2.2f} | valid ppl {:3.2f}'.format(
             val_loss, get_perplexity(val_loss))
         fmt += '| grg {:.4f} | srg {:.4f} | slp {:.2f}'.format(
@@ -292,7 +300,7 @@ def validate(args, epoch, trainer, dataset, subset, ngpus):
         t.write(fmt)
 
     # update and return the learning rate
-    return val_loss
+    return val_loss, grg
 
 if __name__ == '__main__':
     main()
